@@ -1,0 +1,15 @@
+# Root-level ignores. Frontend and backend each have their own .gitignore.
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.local
+
+# Environment / secrets (any level)
+.env
+*.env.local
+
+# Logs
+*.log
