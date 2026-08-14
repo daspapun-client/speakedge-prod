@@ -17,5 +17,8 @@ storage/
 run_dev.ps1
 run_prod.sh
 
-# NB: tests/ and pytest.ini are deliberately kept in the image so CI can gate on
-#   docker run --rm speakedge-api pytest -q
+# NB: tests/ and pytest.ini are deliberately kept in the build context so CI can
+# gate on the suite without a database or a Python toolchain on the runner:
+#   docker build --target test ./backend
+# The runtime stage does NOT install requirements-dev.txt, so the shipped image
+# has the test files but not the test dependencies — run the stage, not the image.

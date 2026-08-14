@@ -1,0 +1,13 @@
+# Test-only dependencies. Kept out of requirements.txt so the runtime image
+# stays lean; installed by the `test` stage of the Dockerfile and by CI.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# pytest / pytest-asyncio / httpx are already runtime deps in requirements.txt.
+
+# tests/conftest.py runs the whole app against an in-memory Mongo, so no real
+# database is needed in CI.
+mongomock-motor==0.0.36
+
+# Drives FastAPI's lifespan (init_db, cache, scheduler) around the test client.
+asgi-lifespan==2.1.0

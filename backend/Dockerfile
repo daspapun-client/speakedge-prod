@@ -9,8 +9,14 @@
 # separate image (see ../frontend/Dockerfile) whose Nginx proxies /api and /media
 # here. For the single-container variant that bundles both, use the repo-root
 # Dockerfile instead — see DEPLOY.md.
+#
+# CI can gate on the test suite without a database:
+#     docker build --target test ./backend
+# The suite runs against an in-memory Mongo (see tests/conftest.py), so the
+# stage needs no services and fails the build on a red test.
 
-FROM python:3.12-slim AS runtime
+# ---------- Stage 1: shared base (deps + source) ----------
+FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -24,6 +30,18 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
+
+# ---------- Stage 2: test (CI gate; not part of the runtime image) ----------
+# Test-only deps live in requirements-dev.txt so they never reach production.
+FROM base AS test
+COPY requirements-dev.txt ./requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt
+RUN python -m pytest -q
+
+# ---------- Stage 3: runtime ----------
+# Last stage in the file, so a plain `docker build ./backend` produces this one
+# and never carries the test dependencies.
+FROM base AS runtime
 
 ENV ENV=production \
     DEBUG=false \
