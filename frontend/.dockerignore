@@ -1,0 +1,6 @@
+# Build context = frontend/. Keep it small and secret-free.
+node_modules
+dist
+dev-dist
+.env
+!.env.example

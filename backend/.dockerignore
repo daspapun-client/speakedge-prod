@@ -1,0 +1,21 @@
+# Build context = backend/. Keep it small and secret-free.
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Runtime data — never bake uploads into the image.
+storage/
+
+# Secrets
+.env
+!.env.example
+
+# Not needed at runtime
+run_dev.ps1
+run_prod.sh
+
+# NB: tests/ and pytest.ini are deliberately kept in the image so CI can gate on
+#   docker run --rm speakedge-api pytest -q
