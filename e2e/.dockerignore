@@ -1,0 +1,28 @@
+# Keep the build context small and secret-free.
+.git
+.gitignore
+**/.gitignore
+
+# Node / frontend
+**/node_modules
+frontend/dist
+frontend/dev-dist
+
+# Python / backend
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+backend/storage
+
+# Secrets (never bake into the image)
+**/.env
+!**/.env.example
+
+# Docs / heavy artifacts not needed at runtime
+docs/
+*.pdf
+*.md
+*.bat
