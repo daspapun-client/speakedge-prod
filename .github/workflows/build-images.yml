@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@010d4a4eec847e9f9c9192f3a672f4a601f1212d
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06
         with:
           role-to-assume: ${{ env.IAM_ROLE }}
           role-session-name: github-actions-backend-build-${{ github.run_id }}
@@ -123,7 +123,7 @@ jobs:
             ./backend
 
       - name: Scan backend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: 481609031842.dkr.ecr.ap-south-1.amazonaws.com/sujyoti-edtech-backend-prod:sha-${{ github.sha }}
           format: table
@@ -155,7 +155,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
       - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@010d4a4eec847e9f9c9192f3a672f4a601f1212d
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06
         with:
           role-to-assume: ${{ env.IAM_ROLE }}
           role-session-name: github-actions-frontend-build-${{ github.run_id }}
@@ -183,7 +183,7 @@ jobs:
             ./frontend
 
       - name: Scan frontend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: 481609031842.dkr.ecr.ap-south-1.amazonaws.com/sujyoti-edtech-frontend-prod:sha-${{ github.sha }}
           format: table
