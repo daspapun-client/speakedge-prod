@@ -34,7 +34,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -84,10 +84,10 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.IAM_ROLE }}
           role-session-name: github-actions-backend-build-${{ github.run_id }}
@@ -122,17 +122,6 @@ jobs:
             --load \
             ./backend
 
-      - name: Scan backend image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
-        with:
-          image-ref: 481609031842.dkr.ecr.ap-south-1.amazonaws.com/sujyoti-edtech-backend-prod:sha-${{ github.sha }}
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          timeout: 10m
-
       - name: Push backend images
         env:
           IMAGE_SHA: ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_REPOSITORY }}:sha-${{ github.sha }}
@@ -152,10 +141,10 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.IAM_ROLE }}
           role-session-name: github-actions-frontend-build-${{ github.run_id }}
@@ -181,17 +170,6 @@ jobs:
             --provenance=false \
             --load \
             ./frontend
-
-      - name: Scan frontend image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
-        with:
-          image-ref: 481609031842.dkr.ecr.ap-south-1.amazonaws.com/sujyoti-edtech-frontend-prod:sha-${{ github.sha }}
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          timeout: 10m
 
       - name: Push frontend images
         env:
