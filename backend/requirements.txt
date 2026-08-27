@@ -18,7 +18,9 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 
 # --- Payments ---
-razorpay==1.4.2
+# 2.x drops the pkg_resources import that broke on Python 3.12+ venvs, where
+# setuptools is no longer present by default. Same Client/order.create API.
+razorpay==2.0.1
 
 # --- Files / media / PDF / spreadsheets ---
 Pillow==11.0.0

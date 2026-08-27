@@ -15,6 +15,7 @@ import {
   Languages,
   Layers,
   LayoutDashboard,
+  Link2,
   LogOut,
   Megaphone,
   Menu,
@@ -57,7 +58,7 @@ const nav: { section: string; items: NavItem[] }[] = [
     items: [
       { to: '/admin/students', label: 'Users & Memberships', icon: Users },
       { to: '/admin/verification', label: 'Verification Queue', icon: ShieldCheck },
-      { to: '/admin/community', label: 'Community Class', icon: UsersRound },
+      { to: '/admin/community', label: 'Community Classes', icon: UsersRound },
       { to: '/admin/leads', label: 'Leads', icon: Megaphone },
     ],
   },
@@ -73,7 +74,12 @@ const nav: { section: string; items: NavItem[] }[] = [
         children: [{ to: '/admin/payments/teacher-payouts', label: 'Teacher payouts' }],
       },
       { to: '/admin/books', label: 'Book Purchases', icon: BookOpen },
-      { to: '/admin/offers', label: 'Offers', icon: Gift },
+      {
+        to: '/admin/offers',
+        label: 'Offers',
+        icon: Gift,
+        children: [{ to: '/admin/offers/new-student', label: 'New student offers' }],
+      },
     ],
   },
   {
@@ -83,7 +89,7 @@ const nav: { section: string; items: NavItem[] }[] = [
       { to: '/admin/teachers', label: 'Teachers', icon: GraduationCap },
       {
         to: '/admin/batches',
-        label: 'Batches',
+        label: 'Teacher-led Batches',
         icon: CalendarClock,
         children: [{ to: '/admin/batches/completed', label: 'Completed batches' }],
       },
@@ -113,6 +119,7 @@ const nav: { section: string; items: NavItem[] }[] = [
       { to: '/admin/archive', label: 'Archive', icon: Archive, superAdmin: true },
       { to: '/admin/activity-logs', label: 'Activity Logs', icon: FileClock },
       { to: '/admin/roles', label: 'Roles & Permissions', icon: UserCog },
+      { to: '/admin/site-links', label: 'Site Links', icon: Link2 },
     ],
   },
 ];

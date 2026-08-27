@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, BookOpen, Check, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { startCheckout } from '@/features/payments/checkout';
-import { TermsGateModal } from '@/components/TermsAgreement';
+import { MEMBERSHIP_INCLUDES, SPEAKEDGE_BOOK_INCLUDED, planBenefits } from '@/lib/membership';
 
 /**
  * Choose Your Membership. Cards are priced transparently — the monthly fee (when
@@ -48,20 +47,8 @@ const conversationText = (p: Plan) =>
     ? `${p.conversation_per_week} Conversation Teams + Unlimited Individual Speaking Partners`
     : 'Unlimited Individual Speaking Partners';
 
-/** Benefits in the order the membership sheet lists them (book shown separately). */
-function benefits(p: Plan): string[] {
-  const out = [`Speaking Community Access: ${plural(p.community_years, 'Year')}`, conversationText(p)];
-  // Tiers without a teacher-led class are AI-guided off the SpeakEdge Book.
-  out.push(
-    p.classes_per_week > 0
-      ? `${p.classes_per_week} Teacher-led Class${p.classes_per_week === 1 ? '' : 'es'}/Week`
-      : 'AI-Guided Learning based on the SpeakEdge Book',
-  );
-  if (p.cefr_tests > 0) out.push(plural(p.cefr_tests, 'CEFR Test'));
-  if (p.speaking_tests > 0) out.push(plural(p.speaking_tests, 'Speaking Test'));
-  if (p.support_years > 0) out.push(`Student Relation Support: ${plural(p.support_years, 'Year')}`);
-  return out;
-}
+// The benefit list itself lives in lib/membership.ts — /plans, the checkout
+// summary and the dashboard panel all render the same one.
 
 export function PlansPage() {
   const navigate = useNavigate();
@@ -77,20 +64,13 @@ export function PlansPage() {
     return [pick(MAIN_ORDER), pick(PRO_ORDER)];
   }, [plans]);
 
-  // Step 1 of the journey. New joiners continue to the bundled checkout
-  // (membership + SpeakEdge Book), which carries its own terms block; existing
-  // members pay from their session, so the terms are gated by a dialog first.
-  const [pendingPlan, setPendingPlan] = useState<Plan | null>(null);
-
-  async function subscribe(p: Plan) {
-    if (!isAuthenticated()) return navigate(`/checkout?plan=${encodeURIComponent(p.plan)}`);
-    setPendingPlan(p);
-  }
-
-  async function confirmSubscribe() {
-    const p = pendingPlan;
-    setPendingPlan(null);
-    if (p) await startCheckout({ plan: p.plan, months: MEMBERSHIP_MONTHS, accept_terms: true });
+  // Step 1 of the journey. Both routes land on a checkout page that captures
+  // the buyer's details and carries the terms block: new joiners on the bundled
+  // one (membership + SpeakEdge Book), signed-in members on the membership-only
+  // one, which subscribes them and returns them to their dashboard.
+  function subscribe(p: Plan) {
+    const path = isAuthenticated() ? '/checkout/membership' : '/checkout';
+    navigate(`${path}?plan=${encodeURIComponent(p.plan)}&months=${MEMBERSHIP_MONTHS}`);
   }
 
   return (
@@ -147,12 +127,6 @@ export function PlansPage() {
         </>
       )}
 
-      <TermsGateModal
-        open={!!pendingPlan}
-        title={`Subscribe to ${pendingPlan?.label ?? ''}`}
-        onCancel={() => setPendingPlan(null)}
-        onConfirm={confirmSubscribe}
-      />
     </div>
   );
 }
@@ -189,11 +163,11 @@ function PlanCard({ plan, onSubscribe }: { plan: Plan; onSubscribe: () => void }
       </div>
 
       <div className="mt-4 flex items-center gap-2 rounded-lg bg-brand-gold/10 px-3 py-2 text-sm font-semibold text-brand">
-        <BookOpen size={16} className="shrink-0" /> SpeakEdge Book Included
+        <BookOpen size={16} className="shrink-0" /> {SPEAKEDGE_BOOK_INCLUDED}
       </div>
 
       <ul className="mt-4 flex-1 space-y-2 text-sm text-slate-600">
-        {benefits(plan).map((b) => (
+        {planBenefits(plan).map((b) => (
           <li key={b} className="flex gap-2">
             <Check size={16} className="mt-0.5 shrink-0 text-brand" /> {b}
           </li>
@@ -242,6 +216,9 @@ function ComparisonTable({ plans }: { plans: Plan[] }) {
           label="Student relation support"
           cells={plans.map((p) => (p.support_years > 0 ? plural(p.support_years, 'year') : '—'))}
         />
+        {MEMBERSHIP_INCLUDES.map((label) => (
+          <BoolRow key={label} label={label} cells={plans.map(() => true)} />
+        ))}
       </tbody>
     </table>
   );

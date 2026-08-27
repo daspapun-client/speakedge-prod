@@ -383,8 +383,8 @@ async def my_prompt(week: int = Query(..., ge=1), day: int = Query(..., ge=1),
     values fall back (B1 / International) rather than erroring.
 
     Students can view but never edit — editing lives on the admin routes above,
-    which are guarded by ``require_admin``. The raw template (with unresolved
-    ``{{placeholders}}``) is not exposed here; students see the final text."""
+    which are guarded by ``require_admin``. ``raw`` + ``params`` are included so
+    the UI can highlight dynamic values; students never receive an edit path."""
     student = await membership_service.get_student(user.subject)
     aud = svc.validate_coords(student.audience.value, week, day)
     lesson = await svc.get_lesson(aud, week, day)
@@ -397,11 +397,17 @@ async def my_prompt(week: int = Query(..., ge=1), day: int = Query(..., ge=1),
     slot = svc.slot_for_stage(stage, svc.accent_key(english))
     rendered = await svc.render_for_student(
         student, week, day, slot, cefr_level=cefr_level, english=english)
+    if rendered["source"] == "override":
+        raw = (lesson.overrides or {}).get(slot, "")
+    else:
+        raw = (await svc.get_template(aud, slot)).body
     return ok({
         "week": week, "day": day, "stage": stage,
         "slot": rendered["slot"], "label": rendered["label"],
         "accent": rendered["accent"],
         "body": rendered["body"],
+        "raw": raw,
+        "params": rendered["params"],
         "cefr_level": rendered["params"]["cefr_level"],
         "preferred_english": rendered["params"]["preferred_english"],
         "day_topic": lesson.day_topic,

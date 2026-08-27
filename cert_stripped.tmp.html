@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpeakEdge CEFR-Aligned Certificate</title>
+<style>
+  :root {
+    --navy: #08265e;
+    --gold: #d99a12;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: #e9edf3;
+    font-family: Arial, Helvetica, sans-serif;
+    color: var(--navy);
+  }
+
+  .toolbar {
+    width: min(1180px, 96vw);
+    margin: 18px auto 10px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+
+  .toolbar button {
+    border: 0;
+    border-radius: 7px;
+    background: var(--navy);
+    color: #fff;
+    padding: 10px 16px;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  /*
+    The certificate artwork is kept as the fixed background.
+    Dynamic student/exam values are positioned above it.
+    This makes the website output visually consistent for every student.
+  */
+  .certificate {
+    position: relative;
+    width: min(1180px, 96vw);
+    aspect-ratio: 3 / 2;
+    margin: 0 auto 28px;
+    background-image: url("data:image/png;base64,STRIPPED");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100% 100%;
+    overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,.15);
+  }
+
+  .field {
+    position: absolute;
+    color: #0b275c;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Left assessment-detail fields */
+  #studentNameSide { left: 18.1%; top: 38.7%; width: 10.3%; font-size: 1.02vw; }
+  #studentId       { left: 18.1%; top: 43.5%; width: 10.3%; font-size: 1.02vw; }
+  #assessmentDate  { left: 18.1%; top: 48.3%; width: 10.3%; font-size: 1.02vw; }
+  #issueDate       { left: 18.1%; top: 53.0%; width: 10.3%; font-size: 1.02vw; }
+  #certificateNo   { left: 18.1%; top: 57.8%; width: 10.3%; font-size: 1.02vw; }
+
+  /* Candidate name on the main certificate line */
+  #studentNameMain {
+    left: 32.4%;
+    top: 35.2%;
+    width: 37.4%;
+    text-align: center;
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    font-weight: 600;
+    font-size: 2.05vw;
+    color: #0a2458;
+  }
+
+  /* Overall CEFR result in the right-side achievement panel */
+  #cefrLevel {
+    left: 79.1%;
+    top: 45.0%;
+    width: 12.5%;
+    text-align: center;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 2.55vw;
+    font-weight: 800;
+    color: #0a2458;
+  }
+
+  @media (min-width: 1230px) {
+    #studentNameSide, #studentId, #assessmentDate, #issueDate, #certificateNo {
+      font-size: 12.5px;
+    }
+    #studentNameMain { font-size: 25px; }
+    #cefrLevel { font-size: 31px; }
+  }
+
+  @media print {
+    @page {
+      size: A4 landscape;
+      margin: 0;
+    }
+
+    html, body {
+      width: 297mm;
+      height: 210mm;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .toolbar { display: none !important; }
+
+    .certificate {
+      width: 280mm;
+      height: 186.667mm;
+      margin: 11.666mm auto 0;
+      box-shadow: none;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    #studentNameSide, #studentId, #assessmentDate, #issueDate, #certificateNo {
+      font-size: 9.4pt;
+    }
+    #studentNameMain { font-size: 18.5pt; }
+    #cefrLevel { font-size: 23pt; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button type="button" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div class="certificate" id="certificate">
+  <!-- All values are blank by default and may be filled by your backend. -->
+  <div class="field" id="studentNameSide">{{student_name}}</div>
+  <div class="field" id="studentId">{{student_id}}</div>
+  <div class="field" id="assessmentDate">{{assessment_date}}</div>
+  <div class="field" id="issueDate">{{issue_date}}</div>
+  <div class="field" id="certificateNo">{{certificate_no}}</div>
+
+  <div class="field" id="studentNameMain">{{student_name}}</div>
+  <div class="field" id="cefrLevel">{{cefr_level}}</div>
+</div>
+
+<script>
+/*
+  Developer integration example:
+  Replace the template values server-side, OR call populateCertificate()
+  with data retrieved from the student's assessment record.
+
+  Example:
+  populateCertificate({
+    student_name: "Riya Sen",
+    student_id: "SPK-26-A81KdP",
+    assessment_date: "25 Aug 2026",
+    issue_date: "25 Aug 2026",
+    certificate_no: "SEC-2026-00127",
+    cefr_level: "B2"
+  });
+*/
+
+function populateCertificate(data) {
+  const map = {
+    studentNameSide: data.student_name ?? "",
+    studentNameMain: data.student_name ?? "",
+    studentId: data.student_id ?? "",
+    assessmentDate: data.assessment_date ?? "",
+    issueDate: data.issue_date ?? "",
+    certificateNo: data.certificate_no ?? "",
+    cefrLevel: data.cefr_level ?? ""
+  };
+
+  for (const [id, value] of Object.entries(map)) {
+    document.getElementById(id).textContent = value;
+  }
+}
+</script>
+
+</body>
+</html>

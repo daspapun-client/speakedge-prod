@@ -2,11 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  CreditCard, Download, Receipt, Sparkles, ArrowRight,
+  CreditCard, Download, Receipt, Sparkles, ArrowRight, Package,
   CheckCircle2, FileText, type LucideIcon,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
-import { PageHeader, StatusBadge, fmtDay, rupees } from '@/features/admin/_shared';
+import { PageHeader, StatusBadge, downloadExport, fmtDay, rupees } from '@/features/admin/_shared';
 
 interface Payment {
   id: string;
@@ -14,15 +14,20 @@ interface Payment {
   invoice_url?: string | null;
   kind: string;
   plan?: string | null;
+  /** What a general payment was for; also what its receipt is titled. */
+  purpose?: string | null;
+  previous_plan?: string | null;
   amount: number;
   status: string;
   created_at: string;
 }
 
 const KIND_LABEL: Record<string, string> = {
-  subscription: 'Subscription',
+  subscription: 'Membership',
   book: 'Book purchase',
   exam: 'Exam fee',
+  monthly: 'Monthly Teacher-led Class fee',
+  general: 'Payment',
 };
 
 function kindLabel(kind: string) {
@@ -30,7 +35,10 @@ function kindLabel(kind: string) {
 }
 
 function itemTitle(p: Payment) {
+  // A general payment is described by its purpose; an upgrade by the move.
+  if (p.purpose) return p.purpose;
   const base = kindLabel(p.kind);
+  if (p.previous_plan && p.plan) return `Upgrade · ${p.previous_plan} → ${p.plan}`;
   return p.plan ? `${base} · ${p.plan}` : base;
 }
 
@@ -87,6 +95,18 @@ function PaymentRow({ payment: p }: { payment: Payment }) {
       </div>
       <div className="flex flex-wrap items-center gap-2 sm:justify-end">
         <StatusBadge status={p.status} />
+        {/* The receipt is rendered on demand from the payment, so it is
+            available even before an invoice has been generated. Authenticated,
+            hence a blob download rather than a plain link. */}
+        <button
+          type="button"
+          className="btn-ghost py-1.5 text-xs"
+          onClick={() =>
+            downloadExport(`/payments/receipt/${p.id}`, {}, `${p.invoice_no ?? p.id}.pdf`)
+          }
+        >
+          <Receipt size={14} /> Receipt
+        </button>
         {p.invoice_url ? (
           <a
             href={p.invoice_url}
@@ -207,6 +227,96 @@ export function PaymentsPage() {
           </div>
         </section>
       )}
+
+      <OrdersSection />
     </div>
+  );
+}
+
+interface BookOrderRow {
+  id: string;
+  order_number: string;
+  status: string;
+  amount: number;
+  plan: string | null;
+  /** Whether a copy of the book ships with this order — a bundled SpeakEdge
+   *  Book is free, so its price cannot answer that. */
+  has_book: boolean;
+  delivery_type: string;
+  activation_code: string | null;
+  courier_name: string | null;
+  tracking_number: string | null;
+  tracking_url: string | null;
+  phone: string;
+  created_at: string | null;
+}
+
+/**
+ * Book and membership orders placed by this member — including the one they
+ * bought their membership with as a guest, which is handed over to the account
+ * at activation. Without this the order is only reachable by order number on
+ * the public tracking page.
+ */
+function OrdersSection() {
+  const { data } = useQuery({
+    queryKey: ['my-book-orders'],
+    queryFn: () => unwrap<BookOrderRow[]>(api.get('/books/my-orders')),
+  });
+  const orders = data ?? [];
+  if (!orders.length) return null;
+
+  return (
+    <section className="card">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+        <div className="flex items-start gap-3">
+          <span className="rounded-lg bg-brand/10 p-2 text-brand">
+            <Package size={18} />
+          </span>
+          <div>
+            <h2 className="font-bold text-slate-800">Orders</h2>
+            <p className="mt-0.5 text-sm text-slate-500">Books and membership orders</p>
+          </div>
+        </div>
+        <span className="text-sm text-slate-400">
+          {orders.length} order{orders.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {orders.map((o) => (
+          <div
+            key={o.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-4"
+          >
+            <div className="min-w-0">
+              <p className="font-mono text-sm font-semibold text-slate-800">{o.order_number}</p>
+              <p className="mt-0.5 text-sm text-slate-500">
+                {[
+                  o.plan ? 'Membership' : null,
+                  o.has_book ? 'SpeakEdge Book' : null,
+                  o.created_at ? new Date(o.created_at).toLocaleDateString() : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+              {o.tracking_number && (
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {o.courier_name} · {o.tracking_number}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-800">{rupees(o.amount)}</span>
+              <StatusBadge status={o.status} />
+              <Link
+                to={`/track?order=${encodeURIComponent(o.order_number)}`}
+                className="btn-ghost py-1.5 text-xs"
+              >
+                Track
+              </Link>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

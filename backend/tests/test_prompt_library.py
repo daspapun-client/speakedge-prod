@@ -255,8 +255,10 @@ async def test_student_can_view_prompt_read_only(client):
     assert "C1" in data["body"]
     assert "British English" in data["body"]
     assert "{{cefr_level}}" not in data["body"]
-    # The raw template is never exposed to students.
-    assert "raw" not in data
+    # raw + params drive the segmented read-only UI (dynamic values highlighted).
+    assert "{{cefr_level}}" in data["raw"]
+    assert data["params"]["cefr_level"] == "C1"
+    assert data["params"]["preferred_english"] == "British English"
 
     for stage, slot in ((2, "learning"), (3, "assessment")):
         got = (await client.get("/api/v1/prompt-library/me/prompt", headers=student,

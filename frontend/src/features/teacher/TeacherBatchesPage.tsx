@@ -275,15 +275,11 @@ function BatchAttendanceBar({
 
 function TeacherBatchCard({
   batch,
-  onDecide,
-  decidePending,
   onRefresh,
   onAttendanceSubmitted,
   splitChat = false,
 }: {
   batch: Batch;
-  onDecide: (student_id: string, action: 'approve' | 'reject') => void;
-  decidePending: boolean;
   onRefresh: () => void;
   onAttendanceSubmitted?: (batchId: string, date: string) => void;
   splitChat?: boolean;
@@ -448,7 +444,7 @@ function TeacherBatchCard({
               )}
               {batch.pending.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-                  <UserPlus size={11} /> {batch.pending.length} pending
+                  <UserPlus size={11} /> {batch.pending.length} awaiting admin
                 </span>
               )}
             </div>
@@ -483,9 +479,12 @@ function TeacherBatchCard({
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Join requests</p>
                   <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-                    {batch.pending.length} waiting
+                    {batch.pending.length} awaiting admin
                   </span>
                 </div>
+                <p className="mb-3 text-xs text-slate-500">
+                  Join requests are reviewed by the admin. Approved students appear in your roster automatically.
+                </p>
                 <div className="space-y-2">
                   {batch.pending.map((p) => (
                     <div
@@ -496,21 +495,8 @@ function TeacherBatchCard({
                         <p className="font-medium text-slate-900">{p.name}</p>
                         <p className="font-mono text-xs text-slate-400">{p.student_id}</p>
                       </div>
-                      <span className="flex gap-1">
-                        <button
-                          className="btn-ghost py-1 text-xs text-emerald-700 hover:bg-emerald-50"
-                          disabled={locked || decidePending}
-                          onClick={() => onDecide(p.student_id, 'approve')}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="btn-ghost py-1 text-xs text-red-600 hover:bg-red-50"
-                          disabled={locked || decidePending}
-                          onClick={() => onDecide(p.student_id, 'reject')}
-                        >
-                          Reject
-                        </button>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+                        Pending admin approval
                       </span>
                     </div>
                   ))}
@@ -678,7 +664,7 @@ function TeacherBatchListCard({ batch, onView }: { batch: Batch; onView: () => v
           )}
           {pendingCount > 0 && (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-              <UserPlus size={11} /> {pendingCount} pending
+              <UserPlus size={11} /> {pendingCount} awaiting admin
             </span>
           )}
         </div>
@@ -859,12 +845,6 @@ export function TeacherBatchList({
     }
   };
 
-  const decide = useMutation({
-    mutationFn: ({ id, student_id, action }: { id: string; student_id: string; action: 'approve' | 'reject' }) =>
-      unwrap(api.post(`/teacher/batches/${id}/${action}-join`, { student_id })),
-    onSuccess: refresh,
-  });
-
   if (isLoading) return <p className="mt-6 text-slate-500">Loading…</p>;
 
   return (
@@ -927,8 +907,6 @@ export function TeacherBatchList({
             <TeacherBatchCard
               batch={selected}
               splitChat
-              onDecide={(student_id, action) => decide.mutate({ id: selected.id, student_id, action })}
-              decidePending={decide.isPending}
               onRefresh={refresh}
               onAttendanceSubmitted={patchAttendanceSubmitted}
             />

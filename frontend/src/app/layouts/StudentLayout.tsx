@@ -18,7 +18,6 @@ import {
   MessageCircle,
   ScrollText,
   Settings,
-  Sparkles,
   Star,
   User,
   Users,
@@ -28,7 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { homeFor, useAuth, type Role } from '@/lib/auth';
 import { ReviewPopup } from '@/features/dashboard/ReviewPopup';
@@ -51,7 +50,6 @@ interface NavItem {
 const STUDENT_NAV: NavItem[] = [
   { to: '/dashboard', label: 'Home', icon: LayoutDashboard, end: true },
   { to: '/dashboard/orientation', label: 'Orientation', icon: GraduationCap, section: 'Learn' },
-  { to: '/dashboard/learning', label: 'Learning', icon: Sparkles, section: 'Learn' },
   { to: '/dashboard/prompt-library', label: 'Prompt Library', icon: ScrollText, section: 'Learn' },
   { to: '/dashboard/subscription', label: 'Subscription', icon: CreditCard, section: 'Learn' },
   { to: '/dashboard/videos', label: 'Videos', icon: Video, section: 'Learn' },
@@ -91,6 +89,8 @@ const PARTNER_NAV: NavItem[] = [
 
 const EXAMINER_NAV: NavItem[] = [
   { to: '/examiner', label: 'Assigned Exams', icon: ScrollText, end: true },
+  { to: '/examiner/students', label: 'Search Students', icon: Users, section: 'Work' },
+  { to: '/examiner/reports', label: 'Submitted Reports', icon: BarChart3, section: 'Work' },
   { to: '/dashboard/notifications', label: 'Notifications', icon: Bell, section: 'Account' },
   { to: '/dashboard/settings', label: 'Settings', icon: Settings, section: 'Account' },
 ];
@@ -260,6 +260,7 @@ function SidebarContent({
   noSub,
   onNavigate,
   onLogout,
+  showLogout = true,
 }: {
   home: string;
   role: Role | null;
@@ -269,6 +270,7 @@ function SidebarContent({
   noSub: boolean;
   onNavigate?: () => void;
   onLogout?: () => void;
+  showLogout?: boolean;
 }) {
   return (
     <>
@@ -288,7 +290,7 @@ function SidebarContent({
         onNavigate={onNavigate}
       />
 
-      {onLogout && (
+      {showLogout && onLogout && (
         <div className="mt-4 border-t border-slate-200 pt-4">
           <SidebarLogoutFooter displayName={displayName} onLogout={onLogout} />
         </div>
@@ -308,12 +310,69 @@ function profileFor(role: Role | null): string {
   }
 }
 
+function ProfileAvatar({
+  photoUrl,
+  name,
+  variant = 'desktop',
+}: {
+  photoUrl?: string | null;
+  name?: string | null;
+  variant?: 'mobile' | 'desktop';
+}) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [photoUrl]);
+  const initial = name?.[0]?.toUpperCase() ?? '?';
+  const showPhoto = Boolean(photoUrl) && !failed;
+
+  if (variant === 'mobile') {
+    if (showPhoto) {
+      return (
+        <img
+          src={photoUrl!}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      );
+    }
+    return (
+      <span className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand to-brand-light text-xs font-bold text-white">
+        {initial}
+      </span>
+    );
+  }
+
+  if (showPhoto) {
+    return (
+      <img
+        src={photoUrl!}
+        alt=""
+        className="h-9 w-9 rounded-full object-cover ring-2 ring-white shadow-sm"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-light text-sm font-bold text-white shadow-sm ring-2 ring-white">
+      {initial}
+    </div>
+  );
+}
+
+function mobileHeaderTitle(pathname: string, nav: NavItem[], home: string): string | null {
+  if (pathname === home) return null;
+  const match = nav.find((n) => (n.end ? pathname === n.to : pathname.startsWith(n.to)));
+  return match?.label ?? null;
+}
+
 export function StudentLayout() {
   const { subject, role, logout } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const NAV = navFor(role);
   const home = homeFor(role);
+  const pageTitle = mobileHeaderTitle(pathname, NAV, home);
 
   const isStudent = !role || role === 'student';
   const { data: dash } = useQuery({
@@ -368,7 +427,7 @@ export function StudentLayout() {
 
       {/* Mobile drawer overlay */}
       {menuOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
+        <div className="fixed inset-0 z-50 md:hidden">
           <button
             className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
             aria-label="Close navigation menu"
@@ -382,7 +441,7 @@ export function StudentLayout() {
             >
               <X size={18} />
             </button>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pt-10">
               <SidebarContent
                 home={home}
                 role={role}
@@ -390,7 +449,13 @@ export function StudentLayout() {
                 nav={NAV}
                 membershipLocked={membershipLocked}
                 noSub={noSub}
+                showLogout={false}
                 onNavigate={() => setMenuOpen(false)}
+              />
+            </div>
+            <div className="shrink-0 border-t border-slate-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <SidebarLogoutFooter
+                displayName={displayName}
                 onLogout={() => {
                   setMenuOpen(false);
                   handleLogout();
@@ -403,32 +468,55 @@ export function StudentLayout() {
 
       <div className="flex min-w-0 flex-1 flex-col has-[:team-chat-page]:min-h-0 has-[:team-chat-page]:overflow-hidden">
         {/* Mobile top bar */}
-        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200/80 bg-white/90 px-3 py-2.5 backdrop-blur-md supports-[backdrop-filter]:bg-white/75 md:hidden">
-          <Link to={home} aria-label="SpeakEdge home" className="shrink-0">
-            <Logo size="sm" />
-          </Link>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <NotificationInbox />
-            <Link
-              to={profileFor(role)}
-              aria-label="Your profile"
-              className="shrink-0 rounded-full ring-2 ring-transparent transition hover:ring-brand/20 active:scale-95"
-            >
-              {photoUrl ? (
-                <img src={photoUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
-              ) : (
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-light text-xs font-bold text-white">
-                  {displayName?.[0]?.toUpperCase() ?? '?'}
-                </div>
-              )}
-            </Link>
+        <header className="mobile-topbar">
+          <div className="mobile-topbar-inner">
             <button
-              className="rounded-xl border border-slate-200 p-2 text-slate-700 transition active:scale-95 hover:bg-slate-50"
+              type="button"
+              className="mobile-topbar-btn"
               onClick={() => setMenuOpen(true)}
               aria-label="Open navigation menu"
             >
-              <Menu size={18} />
+              <Menu size={20} strokeWidth={2.25} />
             </button>
+
+            {pageTitle ? (
+              <div className="min-w-0 flex-1 px-1">
+                <p className="truncate text-[15px] font-bold leading-tight tracking-tight text-slate-900">
+                  {pageTitle}
+                </p>
+                {role && ROLE_LABEL[role] && (
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-brand/80">
+                    {ROLE_LABEL[role]}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <Link
+                to={home}
+                aria-label="SpeakEdge home"
+                className="flex min-w-0 flex-1 items-center gap-2 px-0.5"
+              >
+                <Logo size="sm" />
+                {role && ROLE_LABEL[role] && (
+                  <span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-brand">
+                    {ROLE_LABEL[role]}
+                  </span>
+                )}
+              </Link>
+            )}
+
+            <div className="mobile-topbar-actions">
+              <NotificationInbox compact />
+              <Link
+                to={profileFor(role)}
+                aria-label="Your profile"
+                className="shrink-0 rounded-xl bg-gradient-to-br from-brand to-brand-gold p-[1.5px] shadow-sm transition active:scale-[0.92]"
+              >
+                <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-[0.65rem] bg-white">
+                  <ProfileAvatar photoUrl={photoUrl} name={displayName} variant="mobile" />
+                </span>
+              </Link>
+            </div>
           </div>
         </header>
 
@@ -443,17 +531,7 @@ export function StudentLayout() {
               to={profileFor(role)}
               className="flex items-center gap-3 rounded-xl py-1.5 pl-1.5 pr-3 transition-colors hover:bg-slate-100/80"
             >
-              {photoUrl ? (
-                <img
-                  src={photoUrl}
-                  alt=""
-                  className="h-9 w-9 rounded-full object-cover ring-2 ring-white shadow-sm"
-                />
-              ) : (
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-light text-sm font-bold text-white shadow-sm ring-2 ring-white">
-                  {displayName?.[0]?.toUpperCase() ?? '?'}
-                </div>
-              )}
+              <ProfileAvatar photoUrl={photoUrl} name={displayName} />
               <div className="text-left leading-tight">
                 <p className="text-sm font-semibold text-slate-900">{displayName}</p>
                 {subject && subject !== displayName && (
@@ -503,9 +581,9 @@ export function StudentLayout() {
         </main>
       </div>
 
-      {(!role || role === 'student') && <ReviewPopup />}
-      {(!role || role === 'student') && <ClassAttendancePopup />}
-      {(!role || role === 'student') && <MonthlyDuePopup />}
+      {isStudent && <ReviewPopup />}
+      {isStudent && <ClassAttendancePopup />}
+      {isStudent && <MonthlyDuePopup />}
 
       <a
         href="https://wa.me/918240861168"
@@ -516,7 +594,8 @@ export function StudentLayout() {
         <span className="hidden sm:inline">Support: 8240861168</span>
       </a>
 
-      <TabBar />
+      {/* TabBar links are student routes — teachers/partners/examiners use the sidebar. */}
+      {!menuOpen && isStudent && <TabBar />}
     </div>
   );
 }

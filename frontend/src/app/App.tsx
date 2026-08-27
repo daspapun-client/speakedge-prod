@@ -7,6 +7,7 @@ import { HomePage } from '@/features/public/HomePage';
 import { PlansPage } from '@/features/public/PlansPage';
 import { DemoPage } from '@/features/public/DemoPage';
 import { VerifyPage } from '@/features/public/VerifyPage';
+import { ContactPage } from '@/features/public/ContactPage';
 import {
   PrivacyPage, TermsPage, FaqPage, CommunityRulesPage, SafetyPolicyPage, RefundPolicyPage,
 } from '@/features/public/LegalPages';
@@ -14,7 +15,10 @@ import { ShopPage } from '@/features/shop/ShopPage';
 import { ProductPage } from '@/features/shop/ProductPage';
 import { TrackPage } from '@/features/shop/TrackPage';
 import { CheckoutPage } from '@/features/checkout/CheckoutPage';
+import { OfferLinkPage } from '@/features/checkout/OfferLinkPage';
+import { MembershipCheckoutPage } from '@/features/checkout/MembershipCheckoutPage';
 import { LoginPage } from '@/features/auth/LoginPage';
+import { ForgotPasswordPage, ResetPasswordPage } from '@/features/auth/PasswordResetPages';
 import { ActivatePage } from '@/features/membership/ActivatePage';
 import { StatusPage } from '@/features/membership/StatusPage';
 import { DashboardHome } from '@/features/dashboard/DashboardHome';
@@ -34,6 +38,8 @@ import { ExploreProfilesPage } from '@/features/dashboard/ExploreProfilesPage';
 import { TeamChatPage } from '@/features/dashboard/TeamChatPage';
 import { DirectChatPage } from '@/features/dashboard/DirectChatPage';
 import { ExamsPage } from '@/features/dashboard/ExamsPage';
+import { CertificatePage } from '@/features/dashboard/CertificatePage';
+import { ReportCardPage } from '@/features/dashboard/ReportCardPage';
 import { BatchesPage } from '@/features/dashboard/BatchesPage';
 import { ReportsPage } from '@/features/dashboard/ReportsPage';
 import { NotificationsPage } from '@/features/dashboard/NotificationsPage';
@@ -55,6 +61,8 @@ import { PartnerLeadsPage } from '@/features/partner/PartnerLeadsPage';
 import { PartnerReportsPage } from '@/features/partner/PartnerReportsPage';
 import { PartnerProfilePage } from '@/features/partner/PartnerProfilePage';
 import { ExaminerHome } from '@/features/examiner/ExaminerHome';
+import { ExaminerReportsPage } from '@/features/examiner/ExaminerReportsPage';
+import { ExaminerStudentsPage } from '@/features/examiner/ExaminerStudentsPage';
 import { AdminOverview } from '@/features/admin/AdminOverview';
 import { AdminCodes } from '@/features/admin/AdminCodes';
 import { AdminVerification } from '@/features/admin/AdminVerification';
@@ -78,10 +86,12 @@ import { AdminReports } from '@/features/admin/AdminReports';
 import { AdminArchive } from '@/features/admin/AdminArchive';
 import { AdminActivityLogs } from '@/features/admin/AdminActivityLogs';
 import { AdminRoles } from '@/features/admin/AdminRoles';
+import { AdminSiteLinks } from '@/features/admin/AdminSiteLinks';
 import { AdminBatches } from '@/features/admin/AdminBatches';
 import { AdminCompletedBatches } from '@/features/admin/AdminCompletedBatches';
 import { AdminBatchProfile } from '@/features/admin/AdminBatchProfile';
 import { AdminBatchSeriesPage } from '@/features/admin/AdminBatchSeriesPage';
+import { AdminAdmissionOffers } from '@/features/admin/AdminAdmissionOffers';
 import { AdminOffers } from '@/features/admin/AdminOffers';
 import { AdminPlans } from '@/features/admin/AdminPlans';
 import { AdminLeads } from '@/features/admin/AdminLeads';
@@ -105,6 +115,7 @@ export function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/plans" element={<PlansPage />} />
         <Route path="/demo" element={<DemoPage />} />
+        <Route path="/contact" element={<ContactPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/faq" element={<FaqPage />} />
@@ -113,23 +124,60 @@ export function App() {
         <Route path="/refund-policy" element={<RefundPolicyPage />} />
         <Route path="/activate" element={<ActivatePage />} />
         <Route path="/status/:studentId" element={<StatusPage />} />
+        {/* Public credential check — an institute or employer verifies a
+            certificate / report card by its code, with no account. */}
         <Route path="/verify" element={<VerifyPage />} />
+        <Route path="/verify/:code" element={<VerifyPage />} />
         <Route path="/shop" element={<ShopPage />} />
         <Route path="/shop/product/:id" element={<ProductPage />} />
         <Route path="/checkout" element={<CheckoutPage />} />
+        {/* New Student Offer link. Live -> checkout at the offer price;
+            expired or revoked -> the regular Membership Plans page. */}
+        <Route path="/offer/:token" element={<OfferLinkPage />} />
+        {/* Membership-only checkout for signed-in members (renewal/upgrade).
+            Guests buy the membership + book bundle at /checkout instead. */}
+        <Route
+          path="/checkout/membership"
+          element={
+            <RequireAuth roles={['student']}>
+              <MembershipCheckoutPage />
+            </RequireAuth>
+          }
+        />
         <Route path="/track" element={<TrackPage />} />
         <Route path="/login" element={<LoginPage />} />
+        {/* Password recovery — every portal (student, teacher, partner,
+            examiner, admin) resets through this one pair of pages. */}
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         {/* Teacher & Partner public pages */}
         <Route path="/teachers" element={<TeacherDirectoryPage />} />
         <Route path="/apply/teacher" element={<TeacherApplyPage />} />
         <Route path="/partners" element={<PartnerDirectoryPage />} />
+        {/* Franchisee microsite. /franchisee/<slug> is the canonical URL from the
+            spec; /partners/<slug> is kept so older links keep resolving. */}
+        <Route path="/franchisee/:slug" element={<PartnerMicrositePage />} />
         <Route path="/partners/:slug" element={<PartnerMicrositePage />} />
         <Route path="/apply/partner" element={<PartnerApplyPage />} />
       </Route>
 
+      {/* Shared account pages — every signed-in portal except admin, which has
+          its own notifications screen under /admin. */}
       <Route
         element={
-          <RequireAuth>
+          <RequireAuth roles={['student', 'teacher', 'partner', 'examiner']}>
+            <StudentLayout />
+          </RequireAuth>
+        }
+      >
+        <Route path="/dashboard/notifications" element={<NotificationsPage />} />
+        <Route path="/dashboard/settings" element={<SettingsPage />} />
+      </Route>
+
+      {/* Student portal */}
+      <Route
+        element={
+          <RequireAuth roles={['student']}>
             <StudentLayout />
           </RequireAuth>
         }
@@ -151,12 +199,12 @@ export function App() {
         <Route path="/dashboard/community/member/:studentId" element={<MemberProfilePage />} />
         <Route path="/dashboard/community/:teamId" element={<TeamChatPage />} />
         <Route path="/dashboard/exams" element={<ExamsPage />} />
+        <Route path="/dashboard/certificate/:id" element={<CertificatePage />} />
+        <Route path="/dashboard/report/:id" element={<ReportCardPage />} />
         <Route path="/dashboard/batches" element={<BatchesPage />} />
         <Route path="/dashboard/reports" element={<ReportsPage />} />
-        <Route path="/dashboard/notifications" element={<NotificationsPage />} />
         <Route path="/dashboard/offers" element={<OffersPage />} />
         <Route path="/dashboard/payments" element={<PaymentsPage />} />
-        <Route path="/dashboard/settings" element={<SettingsPage />} />
       </Route>
 
       {/* Teacher portal */}
@@ -199,6 +247,8 @@ export function App() {
         }
       >
         <Route path="/examiner" element={<ExaminerHome />} />
+        <Route path="/examiner/students" element={<ExaminerStudentsPage />} />
+        <Route path="/examiner/reports" element={<ExaminerReportsPage />} />
       </Route>
 
       <Route
@@ -234,12 +284,14 @@ export function App() {
         <Route path="/admin/attendance" element={<AdminClassAttendance />} />
         <Route path="/admin/notifications" element={<AdminNotifications />} />
         <Route path="/admin/offers" element={<AdminOffers />} />
+        <Route path="/admin/offers/new-student" element={<AdminAdmissionOffers />} />
         <Route path="/admin/plans" element={<AdminPlans />} />
         <Route path="/admin/leads" element={<AdminLeads />} />
         <Route path="/admin/reports" element={<AdminReports />} />
         <Route path="/admin/archive" element={<AdminArchive />} />
         <Route path="/admin/activity-logs" element={<AdminActivityLogs />} />
         <Route path="/admin/roles" element={<AdminRoles />} />
+        <Route path="/admin/site-links" element={<AdminSiteLinks />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

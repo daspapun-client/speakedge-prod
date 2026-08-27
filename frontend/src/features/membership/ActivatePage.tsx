@@ -1,25 +1,71 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
-export const CEFR_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'Not Sure'];
+/** Every allowlist and age rule the registration form needs, served by
+ *  GET /membership/form-options. Nothing here is duplicated in the frontend —
+ *  the backend is the single source of truth for what it will accept. */
+export interface ActivationOptions {
+  id_proof_types: string[];
+  academic_levels: string[];
+  guardian_relationships: string[];
+  cefr_levels: string[];
+  min_age: number;
+  kids_max_age: number;
+  minor_age: number;
+}
 
-// Mirrors ID_PROOF_TYPES in backend/app/modules/membership/router.py — the
-// server rejects anything outside this list, so keep the two in sync.
-export const ID_PROOF_TYPES = [
-  'Aadhaar Card',
-  'PAN Card',
-  'Passport',
-  'Voter ID',
-  'Driving Licence',
-  'Ration Card',
-  'School / College ID Card',
-  'Birth Certificate',
-];
+const FALLBACK_OPTIONS: ActivationOptions = {
+  id_proof_types: [],
+  academic_levels: [],
+  guardian_relationships: [],
+  cefr_levels: [],
+  min_age: 8,
+  kids_max_age: 15,
+  minor_age: 18,
+};
 
-// The five Form(bool) consents the backend still requires. The learner now
-// accepts them with one combined checkbox (see TermsAndConsent below), so all
-// five are submitted together.
+export function useActivationOptions() {
+  const { data } = useQuery({
+    queryKey: ['activation-form-options'],
+    queryFn: async () =>
+      (await axios.get('/api/v1/membership/form-options')).data.data as ActivationOptions,
+    staleTime: 5 * 60_000,
+  });
+  return data ?? FALLBACK_OPTIONS;
+}
+
+/** Completed years as of today. Mirrors `age_from_dob` in the backend, which is
+ *  the one that actually decides — this only drives what the form shows. */
+export function ageFromDob(dob: string): number | null {
+  if (!dob) return null;
+  const born = new Date(`${dob}T00:00:00`);
+  if (Number.isNaN(born.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - born.getFullYear();
+  const beforeBirthday =
+    now.getMonth() < born.getMonth() ||
+    (now.getMonth() === born.getMonth() && now.getDate() < born.getDate());
+  if (beforeBirthday) age -= 1;
+  return age >= 0 && age <= 120 ? age : null;
+}
+
+/** Kids / Adult Section allocation + the under-18 flag, all derived from age. */
+export function sectionFor(age: number | null, o: ActivationOptions) {
+  if (age === null) return null;
+  if (age < o.min_age) return { eligible: false, section: null, minor: true } as const;
+  return {
+    eligible: true,
+    section: age <= o.kids_max_age ? 'Kids Section' : 'Adult Section',
+    minor: age < o.minor_age,
+  } as const;
+}
+
+// The five Form(bool) consents the backend still requires. The learner accepts
+// them with one combined checkbox (see the Terms & Consent section below), so
+// all five are submitted together. Guardian consent is separate and only
+// applies to under-18s.
 export const ACTIVATION_CONSENTS = [
   'consent_terms',
   'consent_community_rules',
@@ -46,16 +92,125 @@ function ConsentBlock({ heading, children }: { heading: string; children: React.
   );
 }
 
+/** Shared note under the two verification uploads (requirement: these documents
+ *  are never visible to other SpeakEdge members). */
+export const PRIVATE_DOC_NOTE =
+  'Kept private and used only for verification — never visible to other SpeakEdge members.';
+
+/**
+ * Parent / legal guardian block. Rendered for every learner under 18, including
+ * 16–17 year-olds who sit in the Adult Section.
+ */
+export function GuardianFields({
+  options,
+  consent,
+  onConsentChange,
+}: {
+  options: ActivationOptions;
+  consent: boolean;
+  onConsentChange: (v: boolean) => void;
+}) {
+  return (
+    <fieldset className="md:col-span-2 rounded-xl border border-amber-300 bg-amber-50/70 p-4">
+      <legend className="px-1 text-sm font-bold text-amber-900">
+        Parent / Legal Guardian details (required — learner is under {options.minor_age})
+      </legend>
+      <p className="text-sm text-amber-900">
+        Members under {options.minor_age} are subject to additional parental-consent and
+        community-safety requirements.
+      </p>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div>
+          <label className="label">Parent/Legal Guardian Full Name *</label>
+          <input name="guardian_name" className="input" required />
+        </div>
+        <div>
+          <label className="label">Relationship to Learner *</label>
+          <select name="guardian_relationship" className="input" required defaultValue="">
+            <option value="" disabled>Select…</option>
+            {options.guardian_relationships.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Parent/Legal Guardian Mobile Number *</label>
+          <input name="guardian_phone" className="input" required />
+        </div>
+        <div>
+          <label className="label">Parent/Legal Guardian Email (Optional)</label>
+          <input name="guardian_email" type="email" className="input" />
+        </div>
+      </div>
+      <label className="mt-3 flex items-start gap-3 rounded-lg border border-amber-300 bg-white p-3 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 shrink-0"
+          checked={consent}
+          onChange={(e) => onConsentChange(e.target.checked)}
+        />
+        <span>
+          I am the parent/legal guardian of this learner and I consent to their registration
+          with SpeakEdge, to the verification of the information and documents submitted, to the
+          processing of their personal data as described in the{' '}
+          <PolicyLink to="/privacy">Privacy Policy</PolicyLink>, and to their participation in the
+          applicable SpeakEdge services under the{' '}
+          <PolicyLink to="/terms">Terms &amp; Conditions</PolicyLink>,{' '}
+          <PolicyLink to="/community-rules">Speaking Community Rules</PolicyLink> and{' '}
+          <PolicyLink to="/safety-policy">Community Safety Policy</PolicyLink>. *
+        </span>
+      </label>
+    </fieldset>
+  );
+}
+
+/** Live read-out of what the entered date of birth means: age, eligibility and
+ *  the section the learner is automatically allocated to. */
+export function SectionNotice({ age, options }: { age: number | null; options: ActivationOptions }) {
+  const s = sectionFor(age, options);
+  if (age === null || !s) return null;
+  if (!s.eligible) {
+    return (
+      <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">
+        Age {age} — learners under {options.min_age} are not eligible for membership activation.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-sm text-slate-600">
+      Age {age} · automatically allocated to the{' '}
+      <span className="badge bg-brand/10 text-brand">{s.section}</span>
+      {s.minor && ' · parental consent required'}
+    </p>
+  );
+}
+
 export function ActivatePage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  // The order-confirmation screen links here with the code already in hand.
+  const presetCode = params.get('code') ?? '';
+  const options = useActivationOptions();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string>();
   const [agreed, setAgreed] = useState(false);
-  // Which course the entered code enrols into. Kids and Adults are separate
-  // courses decided by admin when the code is issued — this is read-only
-  // confirmation for the learner, not a choice.
+  const [guardianConsent, setGuardianConsent] = useState(false);
+  // Age is never typed in — it is derived from the date of birth, and it is
+  // what decides eligibility and the Kids/Adult Section.
+  const [age, setAge] = useState<number | null>(null);
+  // Which course the entered code was sold for. Shown for confirmation only;
+  // the section the learner actually lands in comes from their age.
   const [course, setCourse] = useState<string | null>(null);
+
+  const derived = sectionFor(age, options);
+  const isMinor = derived?.eligible === true && derived.minor;
+  const blocked = derived?.eligible === false;
+
+  useEffect(() => {
+    if (presetCode) lookUpCourse(presetCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetCode]);
 
   async function lookUpCourse(code: string) {
     const trimmed = code.trim();
@@ -77,6 +232,7 @@ export function ActivatePage() {
     for (const name of ACTIVATION_CONSENTS) {
       form.set(name, agreed ? 'true' : 'false');
     }
+    form.set('consent_guardian', isMinor && guardianConsent ? 'true' : 'false');
     // Backend rejects an empty cefr_level (must be A1–C2 / "Not Sure" / absent).
     if (!form.get('cefr_level')) form.delete('cefr_level');
     try {
@@ -105,15 +261,16 @@ export function ActivatePage() {
             className="input"
             placeholder="SPK-26-XXXXXX"
             required
+            defaultValue={presetCode}
             onBlur={(e) => lookUpCourse(e.target.value)}
           />
           {course && (
             <p className="mt-2 text-sm text-slate-600">
-              This code enrols you in the{' '}
+              This code was issued for the{' '}
               <span className="badge bg-brand/10 text-brand">
                 {course === 'kids' ? 'Kids' : 'Adults'} course
               </span>
-              . The course is set when the code is issued and cannot be changed here.
+              . Your section is allocated automatically from your date of birth.
             </p>
           )}
         </div>
@@ -126,9 +283,16 @@ export function ActivatePage() {
           <input name="password" type="password" className="input" minLength={6} required />
           <p className="mt-1 text-xs text-slate-500">Minimum 6 characters</p>
         </div>
-        <div>
-          <label className="label">Age *</label>
-          <input name="age" type="number" min={1} max={120} className="input" required />
+        <div className="md:col-span-2">
+          <label className="label">Date of Birth *</label>
+          <input
+            name="dob"
+            type="date"
+            className="input"
+            required
+            onChange={(e) => setAge(ageFromDob(e.target.value))}
+          />
+          <SectionNotice age={age} options={options} />
         </div>
         <div>
           <label className="label">Gender *</label>
@@ -151,10 +315,6 @@ export function ActivatePage() {
           <label className="label">Email</label>
           <input name="email" type="email" className="input" />
         </div>
-        <div>
-          <label className="label">Date of birth</label>
-          <input name="dob" type="date" className="input" />
-        </div>
         <div className="md:col-span-2">
           <label className="label">Full address *</label>
           <textarea name="address" className="input" rows={2} required />
@@ -172,19 +332,28 @@ export function ActivatePage() {
           <input name="pin_code" className="input" required />
         </div>
         <div>
-          <label className="label">Self-declared CEFR level</label>
+          <label className="label">Self-declared CEFR Speaking Level</label>
           <select name="cefr_level" className="input" defaultValue="">
             <option value="">Prefer not to say</option>
-            {CEFR_LEVELS.map((l) => (
+            {options.cefr_levels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Academic / Educational Background *</label>
+          <select name="education_level" className="input" required defaultValue="">
+            <option value="" disabled>Select…</option>
+            {options.academic_levels.map((l) => (
               <option key={l} value={l}>{l}</option>
             ))}
           </select>
         </div>
         <div className="md:col-span-2">
-          <label className="label">About me (within 100 words)</label>
+          <label className="label">About Me (Optional – within 100 words)</label>
           <textarea name="about_me" className="input" rows={2} />
         </div>
-        <div>
+        <div className="md:col-span-2">
           <label className="label">Profile photo * (≤ 500 KB, auto-compressed)</label>
           <input
             name="photo"
@@ -200,22 +369,38 @@ export function ActivatePage() {
           {photoPreview && <img src={photoPreview} alt="preview" className="mt-2 h-20 w-20 rounded object-cover" />}
         </div>
         <div>
-          <label className="label">ID proof type *</label>
+          <label className="label">Identity Proof * </label>
           <select name="id_proof_type" className="input" required defaultValue="">
             <option value="" disabled>Select a document…</option>
-            {ID_PROOF_TYPES.map((t) => (
+            {options.id_proof_types.map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="label">ID proof number</label>
-          <input name="id_proof_number" className="input" placeholder="As printed on the document" />
+          <p className="mt-1 text-xs text-slate-500">
+            Required for identity and membership verification.
+          </p>
         </div>
         <div className="md:col-span-2">
-          <label className="label">Upload ID proof * (≤ 1 MB, JPG/PNG/PDF)</label>
+          <label className="label">Upload Identity Proof * (≤ 1 MB, JPG/PNG/PDF)</label>
           <input name="id_proof" type="file" accept="image/*,application/pdf" className="input" required />
+          <p className="mt-1 text-xs text-slate-500">{PRIVATE_DOC_NOTE}</p>
         </div>
+        <div className="md:col-span-2">
+          <label className="label">Academic / Educational Proof * (≤ 1 MB, JPG/PNG/PDF)</label>
+          <input name="education_proof" type="file" accept="image/*,application/pdf" className="input" required />
+          <p className="mt-1 text-xs text-slate-500">
+            Upload an accepted school, college, academic or educational document verifying your
+            educational background. {PRIVATE_DOC_NOTE}
+          </p>
+        </div>
+
+        {isMinor && (
+          <GuardianFields
+            options={options}
+            consent={guardianConsent}
+            onConsentChange={setGuardianConsent}
+          />
+        )}
 
         <section className="md:col-span-2 border-t border-slate-200 pt-5">
           <h2 className="text-lg font-bold text-slate-900">Membership Activation – Terms &amp; Consent</h2>
@@ -244,7 +429,8 @@ export function ActivatePage() {
               Members must follow SpeakEdge&apos;s Community Safety Policy while participating in
               speaking activities and interacting with other learners. Misuse of the platform,
               inappropriate behaviour or violation of community safety requirements may result in
-              restriction or suspension of community access.{' '}
+              restriction or suspension of community access. Members under {options.minor_age} are
+              subject to additional parental-consent and community-safety requirements.{' '}
               <PolicyLink to="/safety-policy">View Community Safety Policy</PolicyLink>
             </ConsentBlock>
 
@@ -257,7 +443,9 @@ export function ActivatePage() {
             <ConsentBlock heading="Membership Verification">
               Membership activation is subject to verification of the information and documents
               submitted by the learner. The verification process may take up to 72 hours. Access to
-              applicable membership features will be provided after successful verification.
+              applicable membership features will be provided after successful verification. Your
+              Identity Proof and Academic / Educational Proof are used for verification only and are
+              never visible to other SpeakEdge members.
             </ConsentBlock>
           </div>
 
@@ -277,7 +465,10 @@ export function ActivatePage() {
         </section>
 
         {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
-        <button className="btn-primary md:col-span-2" disabled={loading || !agreed}>
+        <button
+          className="btn-primary md:col-span-2"
+          disabled={loading || !agreed || blocked || (isMinor && !guardianConsent)}
+        >
           {loading ? 'Submitting…' : 'Activate Membership'}
         </button>
       </form>

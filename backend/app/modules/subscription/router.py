@@ -5,15 +5,17 @@ from fastapi import APIRouter, Depends
 from app.core.envelope import ok
 from app.core.rbac import CurrentUser, require_student
 from app.db.models import Subscription
+from app.modules.payments import service as payment_service
 
 router = APIRouter(prefix="/subscription", tags=["subscription"])
 
 
 @router.get("/current")
 async def current(user: CurrentUser = Depends(require_student)):
-    sub = await Subscription.find_one(
-        Subscription.student_id == user.subject, Subscription.is_active == True  # noqa: E712
-    )
+    # payments.service owns "which membership is in force": it applies a paid
+    # upgrade whose activation date has arrived instead of reporting the tier
+    # the student has already moved off.
+    sub = await payment_service.active_subscription(user.subject)
     return ok(sub.model_dump(mode="json") if sub else None)
 
 

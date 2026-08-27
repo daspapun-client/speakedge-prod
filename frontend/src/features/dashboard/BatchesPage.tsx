@@ -42,6 +42,9 @@ interface BrowseBatches {
   batches: Batch[];
   batches_used: number;
   batch_limit: number;
+  /** False when the plan grants no teacher-led class at all (Tribe, Basic). */
+  included: boolean;
+  can_join: boolean;
 }
 
 interface TeacherProfile {
@@ -277,6 +280,7 @@ function MobileBatchDateBadge({ dateIso }: { dateIso: string }) {
 function MobileBrowseBatchRow({
   b,
   atCap,
+  capNote,
   joining,
   onJoin,
   withdrawing,
@@ -287,6 +291,7 @@ function MobileBrowseBatchRow({
 }: {
   b: Batch;
   atCap: boolean;
+  capNote: ReactNode;
   joining: boolean;
   onJoin: (id: string) => void;
   withdrawing: boolean;
@@ -363,7 +368,7 @@ function MobileBrowseBatchRow({
           ) : b.status === 'none' ? (
             atCap ? (
               <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-center text-xs font-medium text-amber-800 ring-1 ring-amber-200/80">
-                Plan limit reached — leave a batch to join another
+                {capNote}
               </p>
             ) : (
               <button
@@ -502,9 +507,10 @@ function BatchStatusPill({ status, live }: { status: Batch['status']; live?: boo
   );
 }
 
-function BatchCard({ b, atCap, onJoin, joining, onWithdraw, withdrawing, onDetails, title, hideTitle, past }: {
+function BatchCard({ b, atCap, capNote, onJoin, joining, onWithdraw, withdrawing, onDetails, title, hideTitle, past }: {
   b: Batch;
   atCap: boolean;
+  capNote: ReactNode;
   onJoin: (id: string) => void;
   joining: boolean;
   onWithdraw: (id: string) => void;
@@ -579,8 +585,8 @@ function BatchCard({ b, atCap, onJoin, joining, onWithdraw, withdrawing, onDetai
             <>
               {b.status === 'none' && (
                 atCap ? (
-                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-center text-sm text-slate-500" title="You've reached your plan's batch limit">
-                    Plan limit reached — leave a batch to join another
+                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">
+                    {capNote}
                   </p>
                 ) : (
                   <button className="btn-primary w-full py-2.5" disabled={joining} onClick={() => onJoin(b.id)}>
@@ -591,7 +597,7 @@ function BatchCard({ b, atCap, onJoin, joining, onWithdraw, withdrawing, onDetai
               {b.status === 'pending' && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm font-medium text-amber-800">
-                    <Clock size={15} /> Awaiting teacher approval
+                    <Clock size={15} /> Awaiting admin approval
                   </div>
                   <button
                     type="button"
@@ -660,7 +666,19 @@ export function BatchesPage() {
   const batches = data?.batches ?? [];
   const limit = data?.batch_limit ?? 0;
   const used = data?.batches_used ?? 0;
-  const atCap = limit > 0 && used >= limit;
+  // `included` is false when the plan grants no teacher-led class (Tribe,
+  // Basic) — the batches stay listed, but joining asks for an upgrade instead
+  // of filing a request the admin would only have to decline.
+  const included = data?.included ?? true;
+  const atCap = !included || (limit > 0 && used >= limit);
+  const capNote = included ? (
+    'Plan limit reached — leave a batch to join another'
+  ) : (
+    <>
+      Teacher-led classes are not included in your plan —{' '}
+      <Link to="/plans" className="font-semibold text-brand underline">upgrade to join</Link>
+    </>
+  );
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
 
   const sorted = useMemo(
@@ -750,7 +768,7 @@ export function BatchesPage() {
       {/* Mobile: compact feed (matches Videos page) */}
       <div className="md:hidden">
         <div className="border-b border-slate-100 bg-white px-3 py-2.5">
-          <h1 className="text-lg font-bold text-slate-900">Live Batches</h1>
+          <h1 className="text-lg font-bold text-slate-900">Teacher-led Batches</h1>
           {stats.total > 0 && (
             <p className="mt-0.5 text-xs text-slate-500">
               {stats.open} open {stats.open === 1 ? 'class' : 'classes'} · {stats.enrolled} enrolled · {stats.pending} pending
@@ -809,6 +827,15 @@ export function BatchesPage() {
             <a className="btn-gold mt-2 flex w-full items-center justify-center gap-1.5 py-2 text-sm" href={liveBatch.meeting_url} target="_blank" rel="noreferrer">
               <Video size={15} /> Join meeting
             </a>
+          </div>
+        )}
+
+        {!included && (
+          <div className="flex items-center justify-between gap-3 border-b border-amber-100 bg-amber-50 px-3 py-2.5">
+            <p className="text-xs font-medium text-amber-900">
+              Teacher-led classes are not included in your plan
+            </p>
+            <Link to="/plans" className="shrink-0 text-xs font-semibold text-brand">Upgrade</Link>
           </div>
         )}
 
@@ -963,6 +990,7 @@ export function BatchesPage() {
                           b={b}
                           hideTitle
                           atCap={atCap}
+                          capNote={capNote}
                           joining={join.isPending}
                           onJoin={join.mutate}
                           withdrawing={withdraw.isPending}
@@ -1025,6 +1053,7 @@ export function BatchesPage() {
                         past
                         hideTitle
                         atCap={atCap}
+                        capNote={capNote}
                         joining={join.isPending}
                         onJoin={join.mutate}
                         withdrawing={withdraw.isPending}
@@ -1053,7 +1082,7 @@ export function BatchesPage() {
       {/* Desktop: existing layout */}
       <div className="hidden space-y-6 md:block">
       <PageHeader
-        title="Live Batches"
+        title="Teacher-led Batches"
         description="Join a class batch, track your enrollment, and access your meet link when sessions go live"
       />
 
@@ -1067,10 +1096,12 @@ export function BatchesPage() {
                 {inviteBatch.status === 'member'
                   ? 'You are already enrolled in this batch.'
                   : inviteBatch.status === 'pending'
-                    ? 'Your join request is awaiting teacher approval.'
-                    : atCap
-                      ? 'Your plan batch limit is full — leave a batch to join this one.'
-                      : 'Request to join — subject to your plan batch limit.'}
+                    ? 'Your join request is awaiting admin approval.'
+                    : !included
+                      ? 'Teacher-led classes are not included in your plan — upgrade to join this batch.'
+                      : atCap
+                        ? 'Your plan batch limit is full — leave a batch to join this one.'
+                        : 'Request to join — subject to your plan batch limit.'}
               </p>
             </div>
             {inviteBatch.status === 'none' && !atCap && (
@@ -1173,6 +1204,25 @@ export function BatchesPage() {
                 <Video size={16} /> Join meeting
               </a>
             </div>
+          </div>
+        </div>
+      )}
+
+      {!included && (
+        <div className="card border-amber-200 bg-amber-50/60">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 font-semibold text-slate-800">
+                <Layers size={16} className="text-amber-600" />
+                Teacher-led classes are not included in your plan
+              </div>
+              <p className="mt-1 text-sm text-slate-600">
+                Browse the classes below — upgrade your membership to request a seat in one.
+              </p>
+            </div>
+            <Link to="/plans" className="btn-gold inline-flex shrink-0 items-center gap-1.5 text-sm">
+              <Sparkles size={14} /> Upgrade plan <ArrowRight size={14} />
+            </Link>
           </div>
         </div>
       )}
@@ -1300,6 +1350,7 @@ export function BatchesPage() {
                         b={b}
                         hideTitle
                         atCap={atCap}
+                        capNote={capNote}
                         joining={join.isPending}
                         onJoin={join.mutate}
                         withdrawing={withdraw.isPending}
@@ -1337,6 +1388,7 @@ export function BatchesPage() {
                       past
                       hideTitle
                       atCap={atCap}
+                      capNote={capNote}
                       joining={join.isPending}
                       onJoin={join.mutate}
                       withdrawing={withdraw.isPending}

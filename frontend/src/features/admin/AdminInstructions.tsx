@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Globe, Languages, Loader2, Plus, Save, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { isBlankHtml, RichTextEditor, sanitizeHtml } from '@/components/RichTextEditor';
 import { api, unwrap } from '@/lib/api';
 import { Column, DataTable, Modal, PageHeader } from './_shared';
 
@@ -200,7 +201,10 @@ function TranslationEditor({ instruction, languages, onClose, onSaved, onMeta }:
 
   const save = useMutation({
     mutationFn: () => unwrap<Instruction>(
-      api.put(`/instructions/admin/${instruction.id}/translations/${lang}`, { title, body }),
+      api.put(`/instructions/admin/${instruction.id}/translations/${lang}`, {
+        title,
+        body: sanitizeHtml(body),
+      }),
     ),
     onSuccess: (fresh) => { setError(''); onSaved(fresh); },
     onError: (e: Error) => setError(e.message),
@@ -270,7 +274,10 @@ function TranslationEditor({ instruction, languages, onClose, onSaved, onMeta }:
               }`}
               onClick={() => selectLanguage(l.code)}
             >
-              {l.native}
+              {/* English name first: an admin who cannot read the script still
+                  needs to tell the language tabs apart. */}
+              {l.label}
+              <span className={lang === l.code ? 'text-white/70' : 'text-slate-400'}>{l.native}</span>
               {translated.has(l.code) && (
                 <span className={`h-1.5 w-1.5 rounded-full ${lang === l.code ? 'bg-white' : 'bg-emerald-500'}`} />
               )}
@@ -286,7 +293,7 @@ function TranslationEditor({ instruction, languages, onClose, onSaved, onMeta }:
         </div>
         <div>
           <label className="label">Body</label>
-          <textarea className="input min-h-[12rem]" value={body} onChange={(e) => setBody(e.target.value)} />
+          <RichTextEditor key={lang} value={body} onChange={setBody} lang={lang} />
         </div>
       </div>
 
@@ -305,7 +312,7 @@ function TranslationEditor({ instruction, languages, onClose, onSaved, onMeta }:
         <button className="btn-ghost" onClick={onClose}>Close</button>
         <button
           className="btn-primary inline-flex items-center gap-1.5"
-          disabled={save.isPending || !title.trim() || !body.trim()}
+          disabled={save.isPending || !title.trim() || isBlankHtml(body)}
           onClick={() => save.mutate()}
         >
           {save.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save translation

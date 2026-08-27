@@ -10,9 +10,12 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.core.security import Role
 from app.db.base import utcnow
 from app.db.models import (
+    BookOrder,
     CEFRStatus,
     CommunityProfile,
     MembershipStatus,
+    Payment,
+    PromptAudience,
     Student,
     Subscription,
     User,
@@ -43,7 +46,14 @@ async def activate_membership(
     photo_url: str | None = None,
     id_proof_url: str | None = None,
     id_proof_type: str | None = None,
-    id_proof_number: str | None = None,
+    education_level: str | None = None,
+    education_proof_url: str | None = None,
+    audience: PromptAudience | None = None,
+    guardian_name: str | None = None,
+    guardian_relationship: str | None = None,
+    guardian_phone: str | None = None,
+    guardian_email: str | None = None,
+    consent_guardian: bool = False,
     consent_community_rules: bool = False,
     consent_terms: bool = False,
     consent_safety_policy: bool = False,
@@ -81,11 +91,18 @@ async def activate_membership(
         photo_url=photo_url,
         id_proof_url=id_proof_url,
         id_proof_type=id_proof_type,
-        id_proof_number=id_proof_number,
+        education_level=education_level,
+        education_proof_url=education_proof_url,
+        guardian_name=guardian_name,
+        guardian_relationship=guardian_relationship,
+        guardian_phone=guardian_phone,
+        guardian_email=guardian_email,
+        consent_guardian=consent_guardian,
         referral_code=f"SPKREF-{uuid.uuid4().hex[:6].upper()}",
-        # Kids and Adults are separate courses. The code carries which one was
-        # sold; the student inherits it and can never change it themselves.
-        audience=ac.audience,
+        # Kids and Adults are separate courses, allocated from the learner's age
+        # (router.section_for_age). The code's own audience is what was sold and
+        # is only the fallback; after activation only an admin can move someone.
+        audience=audience or ac.audience,
         membership_status=MembershipStatus.pending,
         cefr_status=CEFRStatus.self_declared,
         cefr_level=cefr_level,
@@ -135,11 +152,31 @@ async def _start_paid_subscription(ac, student_id: str) -> None:
     cfg = await pay.get_plan_config(ac.plan)
     months = ac.plan_months or (cfg.durations[0] if cfg.durations else 12)
     now = utcnow()
+
+    # The order was placed as a guest ("guest:<phone>"), which is the only
+    # identity that existed at payment time. Now that the account exists, hand
+    # the order and its payment over to it — otherwise the buyer can never see
+    # the invoice for their own membership (payment reads are student-scoped).
+    payment_id = None
+    order = await BookOrder.find_one(BookOrder.activation_code == ac.code)
+    if order:
+        if not order.student_id or order.student_id.startswith("guest:"):
+            order.student_id = student_id
+            await order.save()
+        payment = await Payment.get(order.payment_id) if order.payment_id else None
+        if payment:
+            payment_id = str(payment.id)
+            if payment.student_id.startswith("guest:"):
+                payment.student_id = student_id
+                await payment.save()
+
     await Subscription(
         student_id=student_id, plan=ac.plan, started_at=now,
         expires_at=now + timedelta(days=pay._months_to_days(months)),
         is_active=True, months=months,
+        first_month_included=getattr(ac, "first_month_included", False),
         cefr_tests=cfg.cefr_tests, speaking_tests=cfg.speaking_tests,
+        payment_id=payment_id,
     ).insert()
 
 
@@ -150,20 +187,42 @@ async def get_student(student_id: str) -> Student:
     return student
 
 
-async def approve(student_id: str, approver: str) -> Student:
+async def approve(student_id: str, approver: str, plan: str | None = None) -> Student:
+    cfg = None
+    if plan:
+        from app.modules.payments import service as pay  # avoids an import cycle
+        cfg = await pay.get_plan_config(plan)
     student = await get_student(student_id)
-    if student.membership_status == MembershipStatus.active:
-        return student
-    student.membership_status = MembershipStatus.active
-    student.verified_at = utcnow()
-    student.verified_by = approver
-    student.reject_reason = None
-    await student.save()
-    await notif.notify(student_id, "Membership Approved",
-                       "Congratulations! Your SpeakEdge membership is now Active.", kind="approval")
-    if student.email:
-        email_service.approval_email(student.email, student.full_name)
+    if student.membership_status != MembershipStatus.active:
+        student.membership_status = MembershipStatus.active
+        student.verified_at = utcnow()
+        student.verified_by = approver
+        student.reject_reason = None
+        await student.save()
+        label = cfg.label if cfg else "SpeakEdge"
+        await notif.notify(
+            student_id, "Membership Approved",
+            f"Congratulations! Your {label} membership is now Active.", kind="approval")
+        if student.email:
+            email_service.approval_email(student.email, student.full_name)
+    if plan:
+        await _assign_plan(student_id, plan)
     return student
+
+
+async def _assign_plan(student_id: str, plan: str) -> None:
+    """Start (or switch to) the plan admin picked at approval.
+
+    Same plan already active is left alone so an online purchase is not
+    restarted. A different plan, or none, goes through switch_plan."""
+    from app.modules.payments import service as pay
+
+    existing = await Subscription.find_one(
+        Subscription.student_id == student_id, Subscription.is_active == True  # noqa: E712
+    )
+    if existing and existing.plan == plan:
+        return
+    await pay.switch_plan(student_id, plan, carry=existing)
 
 
 async def reject(student_id: str, approver: str, reason: str) -> Student:

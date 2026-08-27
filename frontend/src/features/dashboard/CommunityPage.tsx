@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import {
   UserPlus, Users, MessageCircle, AlertTriangle, Plus, Search,
   Sparkles, Compass, Heart, Loader2, Clock, Pencil, ArrowRight,
-  ClipboardCheck, Star, Ban, UserMinus, ChevronDown, type LucideIcon,
+  ClipboardCheck, Star, Ban, UserMinus, ChevronDown, Lock, type LucideIcon,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -19,6 +19,13 @@ interface Member {
   first_name?: string | null;
   photo_url?: string | null;
   gender?: string | null;
+}
+/** What the member's plan allows for community classes (GET /community/class-access). */
+interface ClassAccess {
+  allowed: number;
+  joined: number;
+  included: boolean;
+  can_join: boolean;
 }
 interface Team {
   id: string;
@@ -391,12 +398,14 @@ function GroupCard({
   team: t,
   subject,
   joining,
+  access,
   onJoin,
   onViewMembers,
 }: {
   team: Team;
   subject: string | null;
   joining: boolean;
+  access?: ClassAccess;
   onJoin: () => void;
   onViewMembers: () => void;
 }) {
@@ -415,9 +424,11 @@ function GroupCard({
       : { label: 'Member', cls: 'bg-emerald-500/90 text-white' }
     : pending
       ? { label: 'Pending', cls: 'bg-amber-400/90 text-white' }
-      : full
-        ? { label: 'Full', cls: 'bg-slate-500/80 text-white' }
-        : { label: 'Open', cls: 'bg-white/90 text-brand backdrop-blur-sm' };
+      : access && !access.included
+        ? { label: 'Upgrade', cls: 'bg-brand-gold/95 text-white' }
+        : full
+          ? { label: 'Full', cls: 'bg-slate-500/80 text-white' }
+          : { label: 'Open', cls: 'bg-white/90 text-brand backdrop-blur-sm' };
 
   return (
     <article
@@ -505,6 +516,16 @@ function GroupCard({
               <Clock size={14} className="shrink-0" />
               Pending
             </div>
+          ) : access && !access.included ? (
+            // The class stays visible on every tier — Tribe includes none, so
+            // joining asks for an upgrade instead of failing on the server.
+            <Link
+              to="/plans"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-brand-gold px-3 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:brightness-105"
+            >
+              <Lock size={14} className="shrink-0" />
+              Upgrade to join
+            </Link>
           ) : full ? (
             <div className="inline-flex items-center justify-center rounded-xl bg-slate-100/80 px-3 py-2.5 text-xs font-medium text-slate-400 ring-1 ring-slate-200/60">
               Full
@@ -549,6 +570,10 @@ export function CommunityPage() {
     queryFn: () => unwrap<{ items: Member[]; total: number }>(api.get('/community/directory')),
   });
   const loadingTeams = useQuery({ queryKey: ['teams'], queryFn: () => unwrap<Team[]>(api.get('/community/teams')) });
+  const loadingAccess = useQuery({
+    queryKey: ['class-access'],
+    queryFn: () => unwrap<ClassAccess>(api.get('/community/class-access')),
+  });
   const loadingFriends = useQuery({
     queryKey: ['friend-requests'],
     queryFn: () => unwrap<{ incoming: FriendReq[]; outgoing: FriendReq[] }>(api.get('/community/friend-requests')),
@@ -572,6 +597,7 @@ export function CommunityPage() {
 
   const dir = loadingDir.data;
   const teams = loadingTeams.data;
+  const access = loadingAccess.data;
   const friends = loadingFriends.data;
   const friendsList = loadingFriendsList.data;
   const blocked = loadingBlocked.data;
@@ -611,6 +637,7 @@ export function CommunityPage() {
     mutationFn: ({ id, action }: { id: string; action: 'join' | 'leave' }) => unwrap(api.post(`/community/teams/${id}/${action}`, {})),
     onSuccess: (_d, v) => {
       invalidate('teams');
+      invalidate('class-access');
       if (v.action === 'join') {
         setDialog({
           title: 'Request sent',
@@ -839,6 +866,7 @@ export function CommunityPage() {
                 team={t}
                 subject={subject}
                 joining={joinLeave.isPending}
+                access={access}
                 onJoin={() => joinLeave.mutate({ id: t.id, action: 'join' })}
                 onViewMembers={() => setMembersModal({ id: t.id, name: t.name })}
               />
@@ -850,12 +878,30 @@ export function CommunityPage() {
               <Users size={22} />
             </div>
             <p className="mt-3 font-semibold text-slate-700">No community classes yet</p>
-            <p className="mt-1 text-sm text-slate-500">Discover and join a group below to start practicing.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {access && !access.included
+                ? 'Community classes are not included in your membership — upgrade to join one.'
+                : 'Discover and join a group below to start practicing.'}
+            </p>
           </div>
         )}
       </Section>
 
       <Section title="Discover community classes" icon={Compass} description="Browse open groups and request to join — owners approve new members" count={discoverFiltered.length}>
+        {access && !access.included && (
+          // Every tier can browse the classes; the entry tier does not include
+          // a seat in one, so say so here instead of only on a failed join.
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-gold/30 bg-brand-gold/5 px-4 py-3">
+            <p className="text-sm text-slate-700">
+              <span className="font-semibold">Community classes are not included in your membership.</span>{' '}
+              You can browse them here — upgrade your membership to join one.
+            </p>
+            <Link to="/plans" className="btn-gold inline-flex shrink-0 items-center gap-1.5 text-sm">
+              <Lock size={14} />
+              Upgrade membership
+            </Link>
+          </div>
+        )}
         {discover.length ? (
           <>
             <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -895,6 +941,7 @@ export function CommunityPage() {
                       team={t}
                       subject={subject}
                       joining={joinLeave.isPending}
+                      access={access}
                       onJoin={() => joinLeave.mutate({ id: t.id, action: 'join' })}
                       onViewMembers={() => setMembersModal({ id: t.id, name: t.name })}
                     />

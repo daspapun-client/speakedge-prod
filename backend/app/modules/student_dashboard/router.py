@@ -24,13 +24,13 @@ from app.db.models import (
     Offer,
     OfferResponse,
     Payment,
-    Subscription,
     Batch,
     Teacher,
     TeacherReview,
 )
 from app.modules.membership import service as membership_service
 from app.modules.notification import service as notif_service
+from app.modules.payments import service as payment_service
 
 router = APIRouter(prefix="/dashboard", tags=["student-dashboard"])
 
@@ -58,9 +58,9 @@ class ProfileUpdate(BaseModel):
 async def home(user: CurrentUser = Depends(require_student)):
     sid = user.subject
     student = await membership_service.get_student(sid)
-    sub = await Subscription.find_one(
-        Subscription.student_id == sid, Subscription.is_active == True  # noqa: E712
-    )
+    # Resolved through payments.service so a paid upgrade whose activation date
+    # has arrived is switched over here, rather than waiting for the scheduler.
+    sub = await payment_service.active_subscription(sid)
     keys = notif_service.recipients_for(sid, user.role)
     broadcasts = await Notification.find(
         {"recipient": {"$in": [k for k in keys if k != sid]},
@@ -172,12 +172,20 @@ async def download_centre(user: CurrentUser = Depends(require_student)):
         {"student_id": sid, "invoice_url": {"$ne": None}, "is_archived": False}
     ).to_list()
     return ok({
+        # Exam date / examiner / grade / remarks travel with the download so the
+        # learner sees the same record the examiner filed (Module 11).
         "certificates": [
-            {"title": c.title, "url": c.certificate_url, "code": c.verification_code}
+            {"id": str(c.id), "title": c.title, "url": c.certificate_url,
+             "code": c.verification_code, "grade": c.grade, "level": c.cefr_level,
+             "remarks": c.remarks, "examiner_name": c.examiner_name,
+             "exam_date": c.exam_date.isoformat() if c.exam_date else None}
             for c in certs
         ],
         "report_cards": [
-            {"level": r.level, "url": r.report_url, "code": r.verification_code}
+            {"id": str(r.id), "level": r.level, "url": r.report_url,
+             "code": r.verification_code,
+             "remarks": r.remarks, "examiner_name": r.examiner_name,
+             "exam_date": r.exam_date.isoformat() if r.exam_date else None}
             for r in reports
         ],
         "invoices": [

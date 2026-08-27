@@ -31,6 +31,8 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+import bookCoverUrl from '@/asset/speakedge-book-cover.png';
+import { admissionOf, planRupees, useLowestAdmissionPrice, usePublicPlans, type PlanPrice } from '@/lib/plans';
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -513,8 +515,10 @@ function Hero() {
                     className="shrink-0 transition-transform group-hover:translate-x-1"
                   />
                 </Link>
+                {/* The SpeakEdge Book is only sold with a membership, so this
+                    goes to the plans page, not the general books catalogue. */}
                 <Link
-                  to="/shop"
+                  to="/plans"
                   className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-5 py-3 text-sm font-semibold text-white backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-white/40 hover:bg-white/15 active:scale-[0.98] sm:min-h-[44px] sm:flex-1 md:flex-none"
                 >
                   <BookOpen size={16} className="shrink-0 text-brand-gold" />
@@ -529,16 +533,32 @@ function Hero() {
                 </Link>
               </div>
 
-              {/* Activate stays available, but must not compete with the acquisition CTAs. */}
-              <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 sm:justify-center md:justify-start">
+              {/* Book buyers are told to activate from the home page, so this has
+                  to be findable at a glance — a highlighted panel rather than a
+                  text link, outlined so it still reads as secondary to the gold
+                  primary CTA above it. */}
+              <div className="mt-4 sm:mx-auto sm:max-w-md md:mx-0 md:max-w-none">
                 <Link
                   to="/activate"
-                  className="group inline-flex items-center gap-1.5 text-sm font-medium text-blue-100/75 transition hover:text-brand-gold"
+                  className="group inline-flex w-full items-center gap-3 rounded-xl border border-brand-gold/60 bg-brand-gold/10 px-4 py-3 text-left transition hover:border-brand-gold hover:bg-brand-gold/15 active:scale-[0.99] md:w-auto"
                 >
-                  <Key size={14} className="text-brand-gold/90" />
-                  Activate Membership
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-gold/20 text-brand-gold">
+                    <Key size={16} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-bold text-brand-gold">Activate Membership</span>
+                    <span className="block text-xs leading-snug text-blue-100/80">
+                      Purchased the SpeakEdge Book? Activate with your code.
+                    </span>
+                  </span>
+                  <ArrowRight
+                    size={16}
+                    className="ml-auto shrink-0 text-brand-gold transition-transform group-hover:translate-x-1"
+                  />
                 </Link>
-                <span className="hidden h-3 w-px bg-white/20 sm:block" aria-hidden />
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 sm:justify-center md:justify-start">
                 <a
                   href="#community"
                   className="group inline-flex items-center gap-1.5 text-sm font-medium text-blue-100/75 transition hover:text-brand-gold"
@@ -1037,6 +1057,7 @@ const MEMBERSHIP_INCLUDES = [
 ];
 
 function Membership() {
+  const lowestAdmission = useLowestAdmissionPrice();
   return (
     <section id="membership" className="scroll-mt-28 bg-white">
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-4 sm:py-16 md:py-24">
@@ -1047,7 +1068,9 @@ function Membership() {
               <div className="mt-4 sm:mt-6">
                 <p className="text-2xl font-black leading-tight tracking-tight sm:text-4xl">
                   Membership Starts at{' '}
-                  <span className="text-brand-gold">₹699</span>
+                  {lowestAdmission != null && (
+                    <span className="text-brand-gold">{planRupees(lowestAdmission)}</span>
+                  )}
                 </p>
               </div>
               <p className="mt-2 text-sm leading-snug text-white/80 sm:mt-4 sm:max-w-md sm:text-base">
@@ -1106,19 +1129,33 @@ function BookShowcase() {
     <section id="book" className="scroll-mt-28 bg-slate-50">
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-4 sm:py-16 md:py-24">
         <div className="grid items-center gap-5 sm:gap-10 md:grid-cols-2 md:gap-12">
-          <div className="flex items-center gap-4 md:justify-center">
-            {/* TODO: swap this placeholder for the final SpeakEdge book cover image. */}
-            <div className="relative h-32 w-24 shrink-0 rotate-[-6deg] rounded-r-md rounded-l-sm bg-gradient-to-br from-brand to-brand-light shadow-xl transition hover:rotate-0 sm:h-48 sm:w-36 md:mx-auto md:h-80 md:w-60 md:rounded-r-lg md:shadow-2xl">
-              <div className="absolute inset-y-0 left-0 w-2 rounded-l-sm bg-black/20 md:w-3" />
-              <div className="flex h-full flex-col items-center justify-center p-3 text-center text-white sm:p-4 md:p-6">
-                <BookOpen className="h-6 w-6 text-brand-gold sm:h-8 sm:w-8 md:h-9 md:w-9" />
-                <div className="mt-2 text-sm font-extrabold sm:mt-3 sm:text-lg md:mt-4 md:text-2xl">
-                  Speak<span className="text-brand-gold">Edge</span>
+          <div className="flex items-center gap-5 py-3 pl-4 sm:gap-6 sm:py-5 sm:pl-6 md:justify-center md:py-8 md:pl-10">
+            <div className="book-3d" aria-hidden="true">
+              <div className="book-3d-ambient" />
+              <div className="book-3d-glow" />
+              <div className="book-3d-scene">
+                <div className="book-3d-cover">
+                  <img
+                    src={bookCoverUrl}
+                    alt=""
+                    draggable={false}
+                    loading="eager"
+                    decoding="async"
+                  />
+                  <div className="book-3d-cover-shine" />
                 </div>
-                <div className="mt-0.5 hidden text-[10px] text-white/70 sm:block sm:text-xs">
-                  Your Learning &amp; Practice Guide
+                <div className="book-3d-cover-lip" />
+                <div className="book-3d-spine">
+                  <span>SpeakEdge</span>
                 </div>
+                <div className="book-3d-pages" />
+                <div className="book-3d-fore" />
+                <div className="book-3d-top" />
+                <div className="book-3d-bottom" />
+                <div className="book-3d-back" />
               </div>
+              <div className="book-3d-platform" />
+              <div className="book-3d-shadow" />
             </div>
             <div className="min-w-0 md:hidden">
               <span className="badge bg-brand-gold/20 text-brand">Book Showcase</span>
@@ -1636,15 +1673,12 @@ function Cefr() {
 
 /**
  * Representative plans shown on the home page — Basic and Pro tiers live on
- * /plans. The monthly fee leads, the one-time fee sits under it.
+ * /plans. Prices come from the live catalogue; the monthly fee leads, the
+ * one-time fee sits under it.
  */
-const PLANS = [
+const HOME_PLANS = [
   {
     name: 'Tribe',
-    monthly: null,
-    headline: '₹699',
-    headlineNote: 'One-Time Membership Fee',
-    secondary: 'No Monthly Fee',
     benefits: [
       'SpeakEdge Book Included',
       'Speaking Community Access: 1 Year',
@@ -1654,10 +1688,6 @@ const PLANS = [
   },
   {
     name: 'Silver',
-    monthly: '₹349',
-    headline: '₹349',
-    headlineNote: 'per month',
-    secondary: '₹1,999 One-Time Admission Fee',
     benefits: [
       'SpeakEdge Book Included',
       'Speaking Community Access: 1 Year',
@@ -1668,10 +1698,6 @@ const PLANS = [
   },
   {
     name: 'Gold',
-    monthly: '₹299',
-    headline: '₹299',
-    headlineNote: 'per month',
-    secondary: '₹2,499 One-Time Admission Fee',
     benefits: [
       'SpeakEdge Book Included',
       'Speaking Community Access: 3 Years',
@@ -1683,10 +1709,6 @@ const PLANS = [
   },
   {
     name: 'Diamond',
-    monthly: '₹249',
-    headline: '₹249',
-    headlineNote: 'per month',
-    secondary: '₹2,999 One-Time Admission Fee',
     benefits: [
       'SpeakEdge Book Included',
       'Speaking Community Access: 5 Years',
@@ -1699,7 +1721,28 @@ const PLANS = [
   },
 ] as const;
 
+function homeCardPrice(cfg: PlanPrice | undefined, name: string) {
+  if (!cfg) return { headline: '', headlineNote: '', secondary: '', monthly: false };
+  const monthly = cfg.monthly_fee > 0;
+  const admission = planRupees(admissionOf(cfg));
+  if (monthly) {
+    return {
+      headline: planRupees(cfg.monthly_fee),
+      headlineNote: 'per month',
+      secondary: `${admission} One-Time Admission Fee`,
+      monthly: true,
+    };
+  }
+  return {
+    headline: admission,
+    headlineNote: name === 'Tribe' ? 'One-Time Membership Fee' : 'One-Time Admission Fee',
+    secondary: 'No Monthly Fee',
+    monthly: false,
+  };
+}
+
 function MembershipPlans() {
+  const { data: catalogue } = usePublicPlans();
   return (
     <section id="plans" className="scroll-mt-28 bg-white">
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-4 sm:py-16 md:py-24">
@@ -1722,37 +1765,45 @@ function MembershipPlans() {
         </div>
 
         <div className="mt-6 grid gap-3 sm:mt-12 sm:grid-cols-2 sm:gap-5 lg:grid-cols-4">
-          {PLANS.map((p) => (
-            <div
-              key={p.name}
-              className="flex flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-brand/25 hover:shadow-md sm:p-5"
-            >
-              <h3 className="text-sm font-bold uppercase tracking-[0.12em] text-brand">{p.name}</h3>
-
-              <div className="mt-3 flex items-baseline gap-1.5">
-                <span className="text-3xl font-black leading-none tracking-tight text-slate-900 sm:text-4xl">
-                  {p.headline}
-                </span>
-                <span className="text-xs font-medium text-slate-500">{p.headlineNote}</span>
-              </div>
-              <p
-                className={`mt-1.5 text-xs font-semibold ${
-                  p.monthly ? 'text-slate-600' : 'text-brand'
-                }`}
+          {HOME_PLANS.map((p) => {
+            const { headline, headlineNote, secondary, monthly } = homeCardPrice(
+              catalogue?.find((c) => c.plan === p.name),
+              p.name,
+            );
+            return (
+              <div
+                key={p.name}
+                className="flex flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-brand/25 hover:shadow-md sm:p-5"
               >
-                {p.secondary}
-              </p>
+                <h3 className="text-sm font-bold uppercase tracking-[0.12em] text-brand">{p.name}</h3>
 
-              <ul className="mt-4 flex-1 space-y-2 border-t border-slate-100 pt-4 text-xs leading-snug text-slate-600 sm:text-sm">
-                {p.benefits.map((b) => (
-                  <li key={b} className="flex gap-2">
-                    <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-brand" />
-                    <span>{b}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+                <div className="mt-3 flex items-baseline gap-1.5">
+                  <span className="text-3xl font-black leading-none tracking-tight text-slate-900 sm:text-4xl">
+                    {headline}
+                  </span>
+                  {headline && (
+                    <span className="text-xs font-medium text-slate-500">{headlineNote}</span>
+                  )}
+                </div>
+                <p
+                  className={`mt-1.5 text-xs font-semibold ${
+                    monthly ? 'text-slate-600' : 'text-brand'
+                  }`}
+                >
+                  {secondary}
+                </p>
+
+                <ul className="mt-4 flex-1 space-y-2 border-t border-slate-100 pt-4 text-xs leading-snug text-slate-600 sm:text-sm">
+                  {p.benefits.map((b) => (
+                    <li key={b} className="flex gap-2">
+                      <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-brand" />
+                      <span>{b}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
         </div>
 
         <div className="mt-6 space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-sm leading-relaxed text-slate-600 sm:mt-8 sm:p-5 sm:text-center">
@@ -1878,7 +1929,7 @@ function FinalCta() {
               </Link>
               <Link
                 to="/activate"
-                className="btn flex min-h-[44px] items-center justify-center border border-white/40 py-3 text-xs font-semibold text-white hover:bg-white/10"
+                className="btn flex min-h-[44px] items-center justify-center border border-brand-gold/60 bg-brand-gold/10 py-3 text-xs font-bold text-brand-gold hover:bg-brand-gold/20"
               >
                 Activate Membership
               </Link>
@@ -1909,7 +1960,7 @@ function FinalCta() {
             </Link>
             <Link
               to="/activate"
-              className="btn min-h-[44px] w-full border border-white/40 py-3 text-white hover:bg-white/10 sm:w-auto sm:py-2"
+              className="btn min-h-[44px] w-full border border-brand-gold/60 bg-brand-gold/10 py-3 font-bold text-brand-gold hover:bg-brand-gold/20 sm:w-auto sm:py-2"
             >
               Activate Membership
             </Link>

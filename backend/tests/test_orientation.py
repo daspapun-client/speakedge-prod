@@ -3,7 +3,7 @@ student; the student walks the steps and self-completes, unlocking the dashboard
 import pytest
 
 from app.core.security import Role, create_access_token
-from app.db.models import MembershipStatus, Student
+from app.db.models import MembershipStatus, Student, Teacher
 
 
 def _auth(role: Role, subject: str) -> dict:
@@ -78,3 +78,52 @@ async def test_live_session_blocks_self_complete(client):
     assert r.status_code == 200
     me = (await client.get("/api/v1/orientation/me", headers=student)).json()["data"]
     assert me["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_teacher_shares_join_link(client):
+    """The assigned teacher publishes the meeting link themselves; the enrolled
+    student reads it off their own orientation page."""
+    sid = "SPK-26-TEST03"
+    await Student(student_id=sid, full_name="Link Learner",
+                  membership_status=MembershipStatus.active).insert()
+    mine = await Teacher(name="Assigned", email="t1@test.com", phone="9000000001",
+                         status="approved", username="teacher1").insert()
+    other = await Teacher(name="Other", email="t2@test.com", phone="9000000002",
+                          status="approved", username="teacher2").insert()
+
+    admin = _auth(Role.admin, "admin@test")
+    student = _auth(Role.student, sid)
+    teacher = _auth(Role.teacher, "teacher1")
+
+    r = await client.post("/api/v1/orientation/batches", headers=admin, json={
+        "title": "Live Orientation", "mode": "live",
+        "teacher_id": str(mine.id), "student_ids": [sid],
+    })
+    batch_id = r.json()["data"]["id"]
+
+    # A bare link is rejected — students need a clickable URL.
+    r = await client.post(f"/api/v1/orientation/teacher/batches/{batch_id}/meeting-link",
+                          headers=teacher, json={"meeting_url": "meet.google.com/abc"})
+    assert r.status_code == 422
+
+    r = await client.post(f"/api/v1/orientation/teacher/batches/{batch_id}/meeting-link",
+                          headers=teacher, json={"meeting_url": "https://meet.google.com/abc"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["meeting_url"] == "https://meet.google.com/abc"
+
+    me = (await client.get("/api/v1/orientation/me", headers=student)).json()["data"]
+    assert me["batch"]["meeting_url"] == "https://meet.google.com/abc"
+
+    # Another teacher cannot touch a session that isn't theirs.
+    assert other.id
+    r = await client.post(f"/api/v1/orientation/teacher/batches/{batch_id}/meeting-link",
+                          headers=_auth(Role.teacher, "teacher2"),
+                          json={"meeting_url": "https://evil.example/abc"})
+    assert r.status_code == 403
+
+    # Clearing it removes the link.
+    r = await client.post(f"/api/v1/orientation/teacher/batches/{batch_id}/meeting-link",
+                          headers=teacher, json={"meeting_url": ""})
+    assert r.status_code == 200
+    assert r.json()["data"]["meeting_url"] is None

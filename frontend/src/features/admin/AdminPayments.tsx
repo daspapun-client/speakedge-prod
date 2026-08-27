@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, unwrap } from '@/lib/api';
-import { Column, DataTable, PageHeader, Paginator, StatusBadge, TableFilter, AdminStudentLink, downloadExport, fmtDate, rupees } from './_shared';
+import { Column, DataTable, Modal, PageHeader, Paginator, StatusBadge, TableFilter, AdminStudentLink, downloadExport, fmtDate, rupees } from './_shared';
 
 interface Payment {
   id?: string;
@@ -11,6 +11,8 @@ interface Payment {
   student_gender?: string | null;
   kind: string;
   plan?: string | null;
+  /** What a kind="general" payment was for — it prints on the receipt. */
+  purpose?: string | null;
   amount: number;
   status: string;
   payment_mode?: string | null;
@@ -18,6 +20,114 @@ interface Payment {
   invoice_no?: string | null;
   refund_status?: string | null;
   created_at: string;
+}
+
+/**
+ * Record a payment that fits none of the other categories. The purpose admin
+ * picks (or types) is what the receipt prints as its description, so it is the
+ * one required field beyond the student and the amount.
+ */
+function GeneralPaymentModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [error, setError] = useState('');
+  const { data: purposes = [] } = useQuery({
+    queryKey: ['general-purposes'],
+    queryFn: () => unwrap<string[]>(api.get('/payments/admin/general/purposes')),
+  });
+  const [purpose, setPurpose] = useState('');
+  const [custom, setCustom] = useState('');
+
+  const save = useMutation({
+    mutationFn: (form: HTMLFormElement) => {
+      const f = new FormData(form);
+      const chosen = (purpose === 'Other' ? custom : purpose).trim();
+      if (!chosen) throw new Error('Choose or enter what this payment is for');
+      const rupeeAmount = Number(f.get('amount'));
+      if (!rupeeAmount || rupeeAmount <= 0) throw new Error('Enter a valid amount');
+      return unwrap(api.post('/payments/admin/general', {
+        student_id: (f.get('student_id') as string).trim(),
+        // The API speaks paise; admin types rupees.
+        amount: Math.round(rupeeAmount * 100),
+        purpose: chosen,
+        payment_mode: f.get('payment_mode') as string,
+        transaction_ref: (f.get('transaction_ref') as string) || undefined,
+        remarks: (f.get('remarks') as string) || undefined,
+      }));
+    },
+    onSuccess: () => { onSaved(); onClose(); },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  return (
+    <Modal onClose={onClose}>
+      <h2 className="text-lg font-bold">Record a payment</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        For miscellaneous payments already collected. It is recorded as settled and the
+        student can download the receipt from their dashboard.
+      </p>
+      <form
+        className="mt-4 grid gap-3"
+        onSubmit={(e) => { e.preventDefault(); setError(''); save.mutate(e.currentTarget); }}
+      >
+        <div>
+          <label className="label">Student ID *</label>
+          <input name="student_id" className="input" placeholder="SPK-26-XXXXXX" required />
+        </div>
+        <div>
+          <label className="label">What is this payment for? *</label>
+          <select
+            className="input"
+            value={purpose}
+            onChange={(e) => setPurpose(e.target.value)}
+            required
+          >
+            <option value="">Select a purpose…</option>
+            {purposes.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        {purpose === 'Other' && (
+          <div>
+            <label className="label">Describe the payment *</label>
+            <input
+              className="input"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              placeholder="Appears on the receipt exactly as typed"
+              required
+            />
+          </div>
+        )}
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="label">Amount (₹) *</label>
+            <input name="amount" type="number" min="1" step="0.01" className="input" required />
+          </div>
+          <div>
+            <label className="label">Payment mode</label>
+            <select name="payment_mode" className="input" defaultValue="manual">
+              {['manual', 'cash', 'upi_manual', 'bank_transfer'].map((m) => (
+                <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="label">Transaction reference</label>
+          <input name="transaction_ref" className="input" placeholder="UPI / receipt number" />
+        </div>
+        <div>
+          <label className="label">Remarks</label>
+          <input name="remarks" className="input" />
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="mt-1 flex justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={save.isPending}>
+            {save.isPending ? 'Recording…' : 'Record payment'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
 
 const STATUSES = ['', 'created', 'paid', 'failed', 'manually_approved', 'refunded', 'partially_refunded', 'cancelled'];
@@ -29,6 +139,7 @@ export function AdminPayments() {
   const [studentId, setStudentId] = useState('');
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
+  const [recording, setRecording] = useState(false);
   const pageSize = 25;
 
   const { data, isLoading } = useQuery({
@@ -76,7 +187,7 @@ export function AdminPayments() {
         gender={p.student_gender}
       />
     ) },
-    { key: 'kind', header: 'Kind / Plan', sort: (p) => p.kind, cell: (p) => <>{p.kind}{p.plan ? ` · ${p.plan}` : ''}</> },
+    { key: 'kind', header: 'Kind / Plan', sort: (p) => p.kind, cell: (p) => <>{p.kind}{p.plan ? ` · ${p.plan}` : ''}{p.purpose ? ` · ${p.purpose}` : ''}</> },
     { key: 'amount', header: 'Amount', align: 'right', sort: (p) => p.amount, cell: (p) => <span className="font-semibold">{rupees(p.amount)}</span> },
     { key: 'status', header: 'Status', sort: (p) => p.status, cell: (p) => <StatusBadge status={p.status} /> },
     { key: 'refund_status', header: 'Refund', cell: (p) => (p.refund_status ? <StatusBadge status={p.refund_status} /> : '—') },
@@ -100,15 +211,29 @@ export function AdminPayments() {
         title="Payment Management"
         description="Razorpay tracking, manual approval, refunds and reconciliation."
         actions={
-          <button
-            className="btn-ghost"
-            onClick={() => downloadExport('/analytics/payments/export', { status: status || undefined }, 'payments.csv')}
-          >
-            Export CSV
-          </button>
+          <div className="flex gap-2">
+            <button className="btn-primary" onClick={() => setRecording(true)}>
+              Record a payment
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => downloadExport('/analytics/payments/export', { status: status || undefined, format: 'csv' }, 'payments.csv')}
+            >
+              Export CSV
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => downloadExport('/analytics/payments/export', { status: status || undefined, format: 'xlsx' }, 'payments.xlsx')}
+            >
+              Export Excel
+            </button>
+          </div>
         }
       />
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {recording && (
+        <GeneralPaymentModal onClose={() => setRecording(false)} onSaved={refresh} />
+      )}
 
       <DataTable
         rows={data?.items}

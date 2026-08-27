@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.envelope import ok
@@ -52,6 +52,7 @@ from app.modules.admin import service as admin_service
 from app.modules.auth import service as auth_service
 from app.modules.membership import service as membership_service
 from app.shared.audit import log_activity
+from app.shared import file_service
 from app.shared.students import load_students_map, student_avatar_fields
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -301,7 +302,8 @@ async def list_students(
 
     return ok({
         "items": [
-            {**s.model_dump(mode="json", exclude={"id_proof_url"}),
+            # Verification documents are pulled only on the single-student views.
+            {**s.model_dump(mode="json", exclude={"id_proof_url", "education_proof_url"}),
              "subscription": _sub_summary(s.student_id),
              **({"login_is_active": login_active[s.student_id]} if s.student_id in login_active else {})}
             for s in items
@@ -431,6 +433,11 @@ class StudentUpdate(BaseModel):
     district: str | None = None
     pin_code: str | None = None
     about_me: str | None = None
+    education_level: str | None = None
+    guardian_name: str | None = None
+    guardian_relationship: str | None = None
+    guardian_phone: str | None = None
+    guardian_email: str | None = None
     membership_status: MembershipStatus | None = None
     cefr_status: CEFRStatus | None = None
     cefr_level: str | None = None
@@ -507,7 +514,20 @@ async def verification_queue(admin: CurrentUser = Depends(require_admin)):
     items = await Student.find(
         Student.membership_status == MembershipStatus.pending, Student.is_archived == False  # noqa: E712
     ).sort(Student.created_at).to_list()
-    return ok([s.model_dump(mode="json") for s in items])
+    ids = [s.student_id for s in items]
+    codes = await ActivationCode.find({"code": {"$in": ids}}).to_list() if ids else []
+    by_code = {c.code: c.plan for c in codes if c.plan}
+    subs = (
+        await Subscription.find({"student_id": {"$in": ids}, "is_active": True}).to_list()
+        if ids else []
+    )
+    by_sub = {s.student_id: s.plan for s in subs}
+    rows = []
+    for s in items:
+        row = s.model_dump(mode="json")
+        row["plan"] = by_sub.get(s.student_id) or by_code.get(s.student_id)
+        rows.append(row)
+    return ok(rows)
 
 
 @router.delete("/students/{student_id}")
@@ -705,6 +725,7 @@ async def unblock_user(username: str, admin: CurrentUser = Depends(require_admin
 class OfferBody(BaseModel):
     title: str
     body: str
+    image_url: str | None = None
     offer_type: str = "subscription_upgrade"
     plan: str | None = None
     amount: int | None = None  # paise
@@ -712,6 +733,18 @@ class OfferBody(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     active: bool = True
+
+
+@router.post("/offers/upload-image")
+async def upload_offer_image(
+    file: UploadFile = File(...),
+    admin: CurrentUser = Depends(require_admin),
+):
+    if file.content_type not in file_service.ALLOWED_IMAGE_TYPES:
+        raise ValidationAppError("Banner image must be JPEG, PNG, or WebP")
+    url = file_service.save_offer_banner(await file.read())
+    await log_activity(admin.subject, "offer.banner_upload", role=admin.role.value)
+    return ok({"url": url})
 
 
 @router.post("/offers")

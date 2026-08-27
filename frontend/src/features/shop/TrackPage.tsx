@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
+import { resumeBookPayment } from '@/features/shop/bookCheckout';
 
 interface StatusEvent {
   status: string;
@@ -22,6 +23,8 @@ interface Tracking {
   activation_code?: string;
   pickup_otp?: string | null;
   pickup_qr?: string | null;
+  /** Order exists but was never paid for — offer to finish the payment. */
+  can_resume?: boolean;
 }
 
 const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
@@ -33,19 +36,26 @@ export function TrackPage() {
   const [data, setData] = useState<Tracking | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [paidCode, setPaidCode] = useState<string | null>(null);
+
+  async function load() {
+    const res = await unwrap<Tracking>(
+      api.get(`/books/track/${encodeURIComponent(orderNumber.trim())}`, {
+        params: phone ? { phone: phone.trim() } : {},
+      }),
+    );
+    setData(res);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setData(null);
+    setPaidCode(null);
     setLoading(true);
     try {
-      const res = await unwrap<Tracking>(
-        api.get(`/books/track/${encodeURIComponent(orderNumber.trim())}`, {
-          params: phone ? { phone: phone.trim() } : {},
-        }),
-      );
-      setData(res);
+      await load();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -53,11 +63,29 @@ export function TrackPage() {
     }
   }
 
+  /** Finish an order the buyer abandoned at the gateway. */
+  async function onPayNow() {
+    setError('');
+    setPaying(true);
+    try {
+      const res = await resumeBookPayment(orderNumber.trim(), phone.trim());
+      if (res.paid) {
+        setPaidCode(res.activation_code ?? null);
+        await load();
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPaying(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-lg">
       <h1 className="text-3xl font-extrabold">Track your order</h1>
       <p className="mt-2 text-slate-600">
-        Enter your order number. Add the phone used at checkout to reveal your activation code and pickup OTP.
+        Enter your order number. Add the phone used at checkout to reveal your activation code and
+        pickup OTP — and to finish paying if you left the payment incomplete.
       </p>
 
       <form onSubmit={onSubmit} className="card mt-6 space-y-4">
@@ -83,6 +111,34 @@ export function TrackPage() {
           </div>
           <div className="text-sm text-slate-500">Delivery: {data.delivery_type}</div>
 
+          {data.can_resume && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-800">
+                This order has not been paid for yet. Your details and{' '}
+                {data.amount != null ? rupees(data.amount) : 'the total'} are saved — finish the
+                payment to confirm it.
+              </p>
+              <button className="btn-primary mt-3 w-full" onClick={onPayNow} disabled={paying}>
+                {paying ? 'Opening payment…' : 'Pay now'}
+              </button>
+            </div>
+          )}
+
+          {paidCode && (
+            <div className="rounded-lg bg-brand-gold/10 p-3 text-sm">
+              <div className="font-semibold text-brand">Payment confirmed</div>
+              <p className="mt-1 text-slate-600">
+                Your activation code is below — use it to create your account.
+              </p>
+              <Link
+                to={`/activate?code=${encodeURIComponent(paidCode)}`}
+                className="btn-primary mt-3 inline-block"
+              >
+                Activate my membership
+              </Link>
+            </div>
+          )}
+
           {data.tracking_number && (
             <div className="text-sm">
               Courier: {data.courier_name} · {data.tracking_number}
@@ -97,6 +153,12 @@ export function TrackPage() {
               <div className="font-semibold text-brand">Your Activation Code</div>
               <div className="font-mono text-lg">{data.activation_code}</div>
               {data.amount != null && <div className="mt-1 text-slate-500">Paid: {rupees(data.amount)}</div>}
+              <Link
+                to={`/activate?code=${encodeURIComponent(data.activation_code)}`}
+                className="btn-primary mt-3 inline-block"
+              >
+                Activate my membership
+              </Link>
             </div>
           )}
 

@@ -10,6 +10,11 @@ class*, and every month after that until the subscription expires. A month
 counts as settled once a paid ``Payment(kind="monthly", due_month="YYYY-MM")``
 exists.
 
+Buyers may also pay that first monthly fee at checkout, alongside the admission
+fee. ``Subscription.first_month_included`` records that, and the derived
+schedule then starts at month 2 — there is no monthly Payment row to match
+against, because the money came in on the admission order.
+
 The anchor is ``Subscription.billing_start_at`` — the class start date, set by
 an admin (auto-suggested from the first batch the student is enrolled in).
 Until it is set the schedule falls back to ``started_at``, so a subscription
@@ -57,10 +62,14 @@ def billing_anchor(sub: Subscription) -> datetime:
 
 
 def due_dates(sub: Subscription) -> list[datetime]:
-    """Every monthly-fee due date for this subscription, oldest first."""
+    """Every monthly-fee due date for this subscription, oldest first.
+
+    A buyer who paid their first monthly fee together with the admission fee has
+    month 1 settled already, so the schedule starts at month 2 for them."""
     started, expires = billing_anchor(sub), _aware(sub.expires_at)
+    first = 2 if getattr(sub, "first_month_included", False) else 1
     out: list[datetime] = []
-    for n in range(1, _MAX_DUES + 1):
+    for n in range(first, _MAX_DUES + 1):
         due = _add_months(started, n)
         if due > expires:
             break

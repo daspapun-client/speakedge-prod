@@ -1,12 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Check, ClipboardCopy, Eye, Loader2, ScrollText } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { PromptBodyView } from '@/components/PromptBodyEditor';
 import { api, unwrap } from '@/lib/api';
 import { Modal } from '@/features/admin/_shared';
-
-/* Read-only prompt viewer for students. The prompt arrives already rendered
- * with the student's own CEFR level and preferred English; there is no edit
- * path here — editing is admin-only (`require_admin` on the PUT routes). */
 
 interface StudentPrompt {
   week: number;
@@ -15,6 +12,8 @@ interface StudentPrompt {
   label: string;
   accent: string;
   body: string;
+  raw: string;
+  params: Record<string, string>;
   cefr_level: string;
   preferred_english: string;
   day_topic: string;
@@ -109,9 +108,11 @@ export function PromptViewerModal({ week, day, stage, cefrLevel, preferredEnglis
             View only: prompts are managed by SpeakEdge.
           </p>
 
-          <pre className="mt-3 max-h-[26rem] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-4 font-mono text-xs leading-relaxed text-slate-700 ring-1 ring-slate-200/70">
-            {prompt.data.body}
-          </pre>
+          <PromptBodyView
+            raw={prompt.data.raw}
+            params={prompt.data.params ?? {}}
+            className="mt-3 max-h-[26rem] overflow-auto rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200/70"
+          />
 
           <div className="mt-4 flex justify-end gap-2">
             <CopyButton text={prompt.data.body} />

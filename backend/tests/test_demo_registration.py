@@ -8,7 +8,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from app.db.models import Lead
+from app.core.security import Role, hash_password
+from app.db.models import Lead, User
 from app.modules.leads import router as leads
 
 pytestmark = pytest.mark.asyncio
@@ -120,3 +121,48 @@ async def test_date_must_fall_on_the_chosen_slots_weekday(client):
 async def test_unknown_choices_are_rejected(client, bad):
     r = await client.post("/api/v1/leads/demo", json=_form(**bad))
     assert r.status_code == 422
+
+
+async def _admin_headers(client) -> dict:
+    await User(
+        username="admin@speakedge.in", email="admin@speakedge.in",
+        password_hash=hash_password("Admin@12345"), role=Role.super_admin,
+        full_name="Super Admin",
+    ).insert()
+    r = await client.post("/api/v1/auth/login",
+                          json={"username": "admin@speakedge.in", "password": "Admin@12345"})
+    return {"Authorization": f"Bearer {r.json()['data']['access_token']}"}
+
+
+async def test_bulk_delete_archives_the_selected_leads(client):
+    for i in range(3):
+        await client.post("/api/v1/leads/demo", json=_form(phone=f"90000000{i}"))
+    headers = await _admin_headers(client)
+    listed = (await client.get("/api/v1/leads/", headers=headers)).json()["data"]["items"]
+    doomed = [lead["id"] for lead in listed[:2]]
+
+    r = await client.post("/api/v1/leads/bulk-delete", json={"ids": doomed}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["deleted"] == 2
+
+    # Archive-first: gone from the list, still restorable in the DB.
+    remaining = (await client.get("/api/v1/leads/", headers=headers)).json()["data"]["items"]
+    assert [lead["id"] for lead in remaining] == [listed[2]["id"]]
+    assert await Lead.find({"is_archived": True}).count() == 2
+
+
+async def test_bulk_delete_skips_unknown_ids_instead_of_failing(client):
+    await client.post("/api/v1/leads/demo", json=_form())
+    headers = await _admin_headers(client)
+    good = (await client.get("/api/v1/leads/", headers=headers)).json()["data"]["items"][0]["id"]
+
+    r = await client.post("/api/v1/leads/bulk-delete",
+                          json={"ids": [good, "not-an-object-id", "0" * 24]}, headers=headers)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["deleted"] == 1 and len(data["skipped"]) == 2
+
+
+async def test_bulk_delete_requires_an_admin(client):
+    r = await client.post("/api/v1/leads/bulk-delete", json={"ids": []})
+    assert r.status_code == 401

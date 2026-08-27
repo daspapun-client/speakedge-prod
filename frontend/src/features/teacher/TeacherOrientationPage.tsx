@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, GraduationCap, PlayCircle, Video } from 'lucide-react';
+import { CheckCircle2, GraduationCap, Link2, PlayCircle, Video } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { PageHeader, StatusBadge, StudentAvatar, fmtDate } from '@/features/admin/_shared';
 
@@ -30,6 +31,11 @@ function SessionCard({ session }: { session: Session }) {
     mutationFn: (ids: string[]) => unwrap(api.post(`/orientation/teacher/batches/${session.id}/complete`, { student_ids: ids })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['teacher-orientation'] }),
   });
+  const [link, setLink] = useState(session.meeting_url ?? '');
+  const saveLink = useMutation({
+    mutationFn: () => unwrap(api.post(`/orientation/teacher/batches/${session.id}/meeting-link`, { meeting_url: link.trim() || null })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['teacher-orientation'] }),
+  });
   const pending = (session.roster ?? []).some((r) => r.orientation_status !== 'completed');
 
   return (
@@ -54,6 +60,32 @@ function SessionCard({ session }: { session: Session }) {
           )}
         </div>
       </div>
+
+      {session.mode === 'live' && (
+        <div className="mt-4 rounded-xl bg-slate-50 p-3">
+          <label className="label flex items-center gap-1.5"><Link2 size={14} /> Join link</label>
+          <div className="mt-1 flex flex-wrap gap-2">
+            <input
+              className="input min-w-0 flex-1"
+              placeholder="https://meet.google.com/…"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+            />
+            <button
+              className="btn-primary"
+              disabled={saveLink.isPending || link.trim() === (session.meeting_url ?? '')}
+              onClick={() => saveLink.mutate()}
+            >
+              {session.meeting_url ? 'Update' : 'Share'}
+            </button>
+          </div>
+          <p className={`mt-1.5 text-xs ${saveLink.error ? 'text-red-600' : 'text-slate-500'}`}>
+            {saveLink.error
+              ? (saveLink.error as Error).message
+              : 'Enrolled students see this link on their orientation page and are notified when you share it.'}
+          </p>
+        </div>
+      )}
 
       {session.roster?.length ? (
         <>

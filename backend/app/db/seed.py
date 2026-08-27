@@ -118,6 +118,8 @@ async def seed() -> None:
             username="examiner@speakedge.in", email="examiner@speakedge.in",
             password_hash=hash_password("Examiner@123"), role=Role.examiner,
             full_name="Demo Examiner",
+            # Published to students on every slot this examiner is assigned to.
+            phone="8240861168", whatsapp="8240861168",
         ).insert()
         print("[seed] examiner: examiner@speakedge.in / Examiner@123")
 

@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban, Check, ExternalLink, Pencil, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Ban, Check, Eye, Pencil, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, unwrap } from '@/lib/api';
-import { AdminStudentLink, Column, DataTable, EmailLink, fmtDay, PageHeader, PhoneLink, RowAction, RowActionDivider, RowActions, StatusBadge, StudentAvatar, TableFilter } from './_shared';
+import { AdminStudentLink, ApprovePlanModal, Column, DataTable, EmailLink, fmtDay, PageHeader, PhoneLink, RowAction, RowActionDivider, RowActions, StatusBadge, StudentAvatar, TableFilter, approveMembership } from './_shared';
 
 interface SubSummary {
   active: { plan: string; started_at: string; expires_at: string } | null;
@@ -136,6 +136,7 @@ function StudentDetailModal({
   const [form, setForm] = useState<StudentEditForm | null>(null);
   const [error, setError] = useState('');
   const [archiveReason, setArchiveReason] = useState('');
+  const [choosingPlan, setChoosingPlan] = useState(false);
 
   const { data: student, isLoading, refetch } = useQuery({
     queryKey: ['admin-student', studentId],
@@ -188,9 +189,10 @@ function StudentDetailModal({
   });
 
   const approve = useMutation({
-    mutationFn: () => unwrap(api.post(`/membership/${studentId}/approve`)),
+    mutationFn: (plan: string) => approveMembership(studentId, plan),
     onSuccess: () => {
       setError('');
+      setChoosingPlan(false);
       invalidateAll();
       refetch();
     },
@@ -238,6 +240,7 @@ function StudentDetailModal({
   const canApprove = student.membership_status === 'Pending Verification';
 
   return (
+    <>
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
       <div className="card max-h-[92vh] w-full max-w-3xl overflow-y-auto">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -332,9 +335,9 @@ function StudentDetailModal({
                 <button
                   className="btn-primary"
                   disabled={approve.isPending}
-                  onClick={() => { setError(''); approve.mutate(); }}
+                  onClick={() => { setError(''); setChoosingPlan(true); }}
                 >
-                  {approve.isPending ? 'Approving…' : 'Approve membership'}
+                  Approve membership
                 </button>
               </section>
             )}
@@ -460,6 +463,16 @@ function StudentDetailModal({
         )}
       </div>
     </div>
+    {choosingPlan && (
+      <ApprovePlanModal
+        studentName={student.full_name}
+        busy={approve.isPending}
+        error={error}
+        onClose={() => setChoosingPlan(false)}
+        onConfirm={(plan) => approve.mutate(plan)}
+      />
+    )}
+    </>
   );
 }
 
@@ -492,6 +505,7 @@ export function AdminStudents() {
   const qc = useQueryClient();
   const [membership, setMembership] = useState('');
   const [viewStudentId, setViewStudentId] = useState<string | null>(null);
+  const [approveFor, setApproveFor] = useState<Student | null>(null);
   const [error, setError] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -503,8 +517,8 @@ export function AdminStudents() {
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-students'] });
 
   const approve = useMutation({
-    mutationFn: (id: string) => unwrap(api.post(`/membership/${id}/approve`)),
-    onSuccess: () => { setError(''); refresh(); },
+    mutationFn: ({ id, plan }: { id: string; plan: string }) => approveMembership(id, plan),
+    onSuccess: () => { setError(''); setApproveFor(null); refresh(); },
     onError: (e: Error) => setError(e.message),
   });
   const reject = useMutation({
@@ -636,7 +650,7 @@ export function AdminStudents() {
                   icon={Check}
                   label="Approve membership"
                   variant="success"
-                  onClick={() => approve.mutate(s.student_id)}
+                  onClick={() => { setError(''); setApproveFor(s); }}
                 />
                 <RowAction
                   icon={X}
@@ -658,7 +672,7 @@ export function AdminStudents() {
                 <RowActionDivider />
               </>
             )}
-            <RowAction icon={ExternalLink} label="Open profile" to={`/admin/students/${s.student_id}`} />
+            <RowAction icon={Eye} label="View profile" to={`/admin/students/${s.student_id}`} />
             <RowAction icon={Pencil} label="Quick edit" onClick={() => setViewStudentId(s.student_id)} />
             {canBlock && (
               <>
@@ -732,6 +746,16 @@ export function AdminStudents() {
           studentId={viewStudentId}
           onClose={() => setViewStudentId(null)}
           onUpdated={() => {}}
+        />
+      )}
+      {approveFor && (
+        <ApprovePlanModal
+          studentName={approveFor.full_name}
+          suggestedPlan={approveFor.subscription?.active?.plan}
+          busy={approve.isPending}
+          error={error}
+          onClose={() => setApproveFor(null)}
+          onConfirm={(plan) => approve.mutate({ id: approveFor.student_id, plan })}
         />
       )}
     </div>

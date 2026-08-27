@@ -22,7 +22,7 @@ const LEFT_TABS: TabItem[] = [
 
 const RIGHT_TABS: TabItem[] = [
   { id: 'explore', label: 'Members', to: '/dashboard/explore', icon: Users },
-  { id: 'batches', label: 'Batches', to: '/dashboard/batches', icon: CalendarClock },
+  { id: 'batches', label: 'Teacher-led Batches', to: '/dashboard/batches', icon: CalendarClock },
 ];
 
 function tabActive(id: string, pathname: string): boolean {

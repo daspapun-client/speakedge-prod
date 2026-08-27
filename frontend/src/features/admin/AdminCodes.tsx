@@ -2,7 +2,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, Trash2, Unlock, UserPlus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api, unwrap } from '@/lib/api';
-import { ACTIVATION_CONSENTS, CEFR_LEVELS, ID_PROOF_TYPES } from '@/features/membership/ActivatePage';
+import {
+  ACTIVATION_CONSENTS,
+  GuardianFields,
+  PRIVATE_DOC_NOTE,
+  SectionNotice,
+  ageFromDob,
+  sectionFor,
+  useActivationOptions,
+} from '@/features/membership/ActivatePage';
 import { AdminStudentLink, Column, DataTable, Modal, RowAction, RowActionDivider, RowActions, StatCard, TableFilter, downloadExport } from './_shared';
 
 interface Code {
@@ -46,8 +54,16 @@ function ManualEnrollModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const options = useActivationOptions();
   const [error, setError] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string>();
+  const [guardianConsent, setGuardianConsent] = useState(false);
+  // Age is derived from the date of birth, exactly as on the public form.
+  const [age, setAge] = useState<number | null>(null);
+
+  const derived = sectionFor(age, options);
+  const isMinor = derived?.eligible === true && derived.minor;
+  const blocked = derived?.eligible === false;
 
   const enroll = useMutation({
     mutationFn: (form: FormData) => unwrap(api.post('/activation-codes/manual-activate', form)),
@@ -69,6 +85,7 @@ function ManualEnrollModal({
       form.set(name, agreed ? 'true' : 'false');
     }
     form.delete('consent_all');
+    form.set('consent_guardian', isMinor && guardianConsent ? 'true' : 'false');
     if (!form.get('cefr_level')) form.delete('cefr_level');
     enroll.mutate(form);
   }
@@ -95,9 +112,16 @@ function ManualEnrollModal({
           <input name="password" type="password" className="input" minLength={6} required />
           <p className="mt-1 text-xs text-slate-500">Minimum 6 characters</p>
         </div>
-        <div>
-          <label className="label">Age *</label>
-          <input name="age" type="number" min={1} max={120} className="input" required />
+        <div className="md:col-span-2">
+          <label className="label">Date of Birth *</label>
+          <input
+            name="dob"
+            type="date"
+            className="input"
+            required
+            onChange={(e) => setAge(ageFromDob(e.target.value))}
+          />
+          <SectionNotice age={age} options={options} />
         </div>
         <div>
           <label className="label">Gender *</label>
@@ -120,10 +144,6 @@ function ManualEnrollModal({
           <label className="label">Email</label>
           <input name="email" type="email" className="input" />
         </div>
-        <div>
-          <label className="label">Date of birth</label>
-          <input name="dob" type="date" className="input" />
-        </div>
         <div className="md:col-span-2">
           <label className="label">Full address *</label>
           <textarea name="address" className="input" rows={2} required />
@@ -141,16 +161,25 @@ function ManualEnrollModal({
           <input name="pin_code" className="input" required />
         </div>
         <div>
-          <label className="label">Self-declared CEFR level</label>
+          <label className="label">Self-declared CEFR Speaking Level</label>
           <select name="cefr_level" className="input" defaultValue="">
             <option value="">Prefer not to say</option>
-            {CEFR_LEVELS.map((l) => (
+            {options.cefr_levels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Academic / Educational Background *</label>
+          <select name="education_level" className="input" required defaultValue="">
+            <option value="" disabled>Select…</option>
+            {options.academic_levels.map((l) => (
               <option key={l} value={l}>{l}</option>
             ))}
           </select>
         </div>
         <div className="md:col-span-2">
-          <label className="label">About me (within 100 words)</label>
+          <label className="label">About Me (Optional – within 100 words)</label>
           <textarea name="about_me" className="input" rows={2} />
         </div>
         <div>
@@ -169,22 +198,37 @@ function ManualEnrollModal({
           {photoPreview && <img src={photoPreview} alt="preview" className="mt-2 h-16 w-16 rounded object-cover" />}
         </div>
         <div>
-          <label className="label">ID proof type *</label>
+          <label className="label">Identity Proof *</label>
           <select name="id_proof_type" className="input" required defaultValue="">
             <option value="" disabled>Select a document…</option>
-            {ID_PROOF_TYPES.map((t) => (
+            {options.id_proof_types.map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="label">ID proof number</label>
-          <input name="id_proof_number" className="input" placeholder="As printed on the document" />
+          <p className="mt-1 text-xs text-slate-500">
+            Required for identity and membership verification.
+          </p>
         </div>
         <div className="md:col-span-2">
-          <label className="label">Upload ID proof *</label>
+          <label className="label">Upload Identity Proof *</label>
           <input name="id_proof" type="file" accept="image/*,application/pdf" className="input" required />
+          <p className="mt-1 text-xs text-slate-500">{PRIVATE_DOC_NOTE}</p>
         </div>
+        <div className="md:col-span-2">
+          <label className="label">Upload Academic / Educational Proof *</label>
+          <input name="education_proof" type="file" accept="image/*,application/pdf" className="input" required />
+          <p className="mt-1 text-xs text-slate-500">
+            School, college, academic or educational document verifying the stated background.{' '}
+            {PRIVATE_DOC_NOTE}
+          </p>
+        </div>
+        {isMinor && (
+          <GuardianFields
+            options={options}
+            consent={guardianConsent}
+            onConsentChange={setGuardianConsent}
+          />
+        )}
         <div className="md:col-span-2">
           <label className="label">Reason (optional, logged)</label>
           <input name="reason" className="input" placeholder="Why is this being enrolled manually?" />
@@ -200,7 +244,11 @@ function ManualEnrollModal({
         </fieldset>
         {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
         <div className="md:col-span-2">
-          <button type="submit" className="btn-primary" disabled={enroll.isPending}>
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={enroll.isPending || blocked || (isMinor && !guardianConsent)}
+          >
             {enroll.isPending ? 'Enrolling…' : 'Enroll student'}
           </button>
         </div>
@@ -462,8 +510,11 @@ export function AdminCodes() {
         <button className="btn-primary" onClick={() => gen.mutate()} disabled={gen.isPending}>
           {gen.isPending ? 'Generating…' : 'Generate batch'}
         </button>
-        <button className="btn-ghost" onClick={() => downloadExport('/activation-codes/export', {}, 'activation_codes.csv')}>
+        <button className="btn-ghost" onClick={() => downloadExport('/activation-codes/export', { format: 'csv' }, 'activation_codes.csv')}>
           Export CSV
+        </button>
+        <button className="btn-ghost" onClick={() => downloadExport('/activation-codes/export', { format: 'xlsx' }, 'activation_codes.xlsx')}>
+          Export Excel
         </button>
         {gen.isSuccess && <span className="text-sm text-green-600">Generated {gen.data.generated} codes ✓</span>}
       </div>

@@ -1,7 +1,9 @@
 """SpeakEdge Speaking Community (Module 6) — three layers:
 Layer 1/2: public stats + limited member carousel/directory (no auth).
-Layer 3:  member dashboard — directory, friend requests, teams (max 2 owned,
-max 8 members), report & block, admin safety cards."""
+Layer 3:  member dashboard — directory, friend requests, teams (max 8 members;
+how many a student may be in comes from their plan's conversation teams, so a
+Tribe member sees the classes but is asked to upgrade to join one), report &
+block, admin safety cards."""
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -23,8 +25,10 @@ from app.db.models import (
     CommunityReport,
     DirectMessage,
     FriendRequest,
+    PlanConfig,
     SafetyCard,
     SpeakingTeam,
+    Subscription,
     TeamJoinRequest,
     TeamMessage,
     TeamRead,
@@ -635,6 +639,55 @@ async def _teams_joined(student_id: str) -> int:
     ).count()
 
 
+async def _team_allowance(student_id: str) -> int:
+    """How many community classes this student's membership includes.
+
+    That is the tier's `conversation_per_week` (conversation teams), read live
+    off the catalogue so an admin edit applies to memberships already sold, and
+    capped by the platform maximum. Tribe includes **none**: the classes stay
+    visible to a Tribe member, but every way of getting into one asks for an
+    upgrade instead. A student with no membership on file keeps the old
+    platform-wide limit rather than being locked out."""
+    sub = await Subscription.find_one(
+        Subscription.student_id == student_id,
+        Subscription.is_active == True,  # noqa: E712
+    )
+    cfg = await PlanConfig.find_one(PlanConfig.plan == sub.plan) if sub else None
+    if cfg is None:
+        return SpeakingTeam.MAX_TEAMS_PER_OWNER
+    return min(cfg.conversation_per_week, SpeakingTeam.MAX_TEAMS_PER_OWNER)
+
+
+async def _check_team_quota(student_id: str, *, who: str | None = None) -> None:
+    """Refuse when this student's membership has no community class left — or
+    never included one. `who` names them when somebody else is being added."""
+    allowed = await _team_allowance(student_id)
+    if allowed <= 0:
+        raise ConflictError(
+            f"{who}'s membership does not include community classes."
+            if who else
+            "Community classes are not included in your membership. "
+            "Upgrade your membership to join a community class."
+        )
+    if await _teams_joined(student_id) >= allowed:
+        raise ConflictError(
+            f"{who} is already in the maximum number of community classes"
+            if who else
+            f"You can be in at most {allowed} community class"
+            f"{'' if allowed == 1 else 'es'} at a time"
+        )
+
+
+@router.get("/class-access")
+async def class_access(user: CurrentUser = Depends(require_unlocked_community_student)):
+    """What this member's plan allows for community classes — drives the
+    "Upgrade to join" state on the cards instead of a failed join attempt."""
+    allowed = await _team_allowance(user.subject)
+    joined = await _teams_joined(user.subject)
+    return ok({"allowed": allowed, "joined": joined,
+               "included": allowed > 0, "can_join": joined < allowed})
+
+
 async def _name_of(student_id: str) -> str:
     cp = await CommunityProfile.find_one(CommunityProfile.student_id == student_id)
     return (cp.display_name if cp else None) or student_id
@@ -661,9 +714,8 @@ async def _apply_team_members(team: SpeakingTeam, member_ids: list[str]) -> list
     prev = set(team.member_ids)
     for sid in unique:
         await _require_active_community_member(sid)
-        if sid not in prev and await _teams_joined(sid) >= SpeakingTeam.MAX_TEAMS_PER_OWNER:
-            name = await _name_of(sid)
-            raise ConflictError(f"{name} is already in the maximum number of community classes")
+        if sid not in prev:
+            await _check_team_quota(sid, who=await _name_of(sid))
     team.member_ids = unique
     return [sid for sid in unique if sid not in prev]
 
@@ -698,10 +750,7 @@ async def create_team(
     banner: UploadFile | None = File(None),
     user: CurrentUser = Depends(require_unlocked_community_student),
 ):
-    if await _teams_joined(user.subject) >= SpeakingTeam.MAX_TEAMS_PER_OWNER:
-        raise ConflictError(
-            f"You can be in at most {SpeakingTeam.MAX_TEAMS_PER_OWNER} community classes at a time"
-        )
+    await _check_team_quota(user.subject)
     name, description, max_members = _parse_team_fields(name, description, max_members, min_members=2)
     banner_url = await _save_banner(banner)
     team = SpeakingTeam(
@@ -764,10 +813,7 @@ async def request_join(team_id: str, user: CurrentUser = Depends(require_unlocke
         raise ConflictError("You are already a member")
     if len(team.member_ids) >= _capacity(team):
         raise ConflictError(f"This community class is full ({_capacity(team)} members max)")
-    if await _teams_joined(user.subject) >= SpeakingTeam.MAX_TEAMS_PER_OWNER:
-        raise ConflictError(
-            f"You can be in at most {SpeakingTeam.MAX_TEAMS_PER_OWNER} community classes at a time"
-        )
+    await _check_team_quota(user.subject)
     existing = await TeamJoinRequest.find_one(
         TeamJoinRequest.team_id == team_id,
         TeamJoinRequest.requester_student_id == user.subject,
@@ -814,8 +860,7 @@ async def _decide_join(req: TeamJoinRequest, team: SpeakingTeam, action: str) ->
         if req.requester_student_id not in team.member_ids:
             if len(team.member_ids) >= _capacity(team):
                 raise ConflictError(f"This community class is full ({_capacity(team)} members max)")
-            if await _teams_joined(req.requester_student_id) >= SpeakingTeam.MAX_TEAMS_PER_OWNER:
-                raise ConflictError("This student is already in the maximum number of community classes")
+            await _check_team_quota(req.requester_student_id, who="This student")
             team.member_ids.append(req.requester_student_id)
             team.touch()
             await team.save()

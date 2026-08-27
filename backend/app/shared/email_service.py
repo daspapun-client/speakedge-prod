@@ -48,3 +48,17 @@ def approval_email(to: str, name: str) -> None:
 def payment_email(to: str, name: str, invoice_no: str) -> None:
     send_email(to, "SpeakEdge payment received",
                f"<p>Hi {name}, we received your payment. Invoice <b>{invoice_no}</b> is available in your dashboard.</p>")
+
+
+def password_reset_email(to: str, name: str, link: str, minutes: int) -> None:
+    send_email(
+        to,
+        "Reset your SpeakEdge password",
+        f"<p>Hi {name},</p>"
+        f"<p>We received a request to reset your SpeakEdge password. "
+        f'Click the link below to choose a new one — it is valid for {minutes} minutes '
+        f"and can be used once.</p>"
+        f'<p><a href="{link}">Reset my password</a></p>'
+        f"<p>If the link does not open, paste this into your browser:<br>{link}</p>"
+        f"<p>If you did not ask for this, you can ignore this email — your password stays unchanged.</p>",
+    )

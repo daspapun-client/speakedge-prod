@@ -85,17 +85,37 @@ def save_book_cover(raw: bytes) -> str:
     return save_bytes(compress_image(raw, settings.MAX_PHOTO_KB, max_dim=1000), "book_covers")
 
 
-def save_id_proof(raw: bytes, content_type: str = "image/jpeg") -> str:
-    """Images are compressed; PDFs (Aadhaar/Voter ID/etc.) are size-checked as-is."""
+def save_partner_photo(raw: bytes) -> str:
+    """Franchisee microsite logo / gallery photos."""
+    return save_bytes(compress_image(raw, settings.MAX_PHOTO_KB, max_dim=1400), "partner_photos")
+
+
+def save_offer_banner(raw: bytes) -> str:
+    """Wide promotional banner images for exclusive member offers."""
+    return save_bytes(compress_image(raw, settings.MAX_PHOTO_KB, max_dim=1400), "offer_banners")
+
+
+def _save_verification_doc(raw: bytes, content_type: str, subdir: str) -> str:
+    """A document uploaded for verification only. Images are compressed; PDFs
+    (Aadhaar/Voter ID/marksheets/etc.) are size-checked as-is."""
     if content_type == "application/pdf":
         if len(raw) > settings.MAX_ID_PROOF_KB * 1024:
             raise ValidationAppError(
                 f"The uploaded file exceeds the allowed size ({settings.MAX_ID_PROOF_KB} KB). "
                 "Please upload a smaller file."
             )
-        return save_bytes(raw, "id_proofs", ext="pdf")
-    # Keep ID docs legible for verification while still shrinking them.
-    return save_bytes(compress_image(raw, settings.MAX_ID_PROOF_KB, max_dim=1600), "id_proofs")
+        return save_bytes(raw, subdir, ext="pdf")
+    # Keep the document legible for verification while still shrinking it.
+    return save_bytes(compress_image(raw, settings.MAX_ID_PROOF_KB, max_dim=1600), subdir)
+
+
+def save_id_proof(raw: bytes, content_type: str = "image/jpeg") -> str:
+    return _save_verification_doc(raw, content_type, "id_proofs")
+
+
+def save_education_proof(raw: bytes, content_type: str = "image/jpeg") -> str:
+    """School/college/academic document proving the learner's stated background."""
+    return _save_verification_doc(raw, content_type, "education_proofs")
 
 
 def save_video(raw: bytes, content_type: str) -> str:

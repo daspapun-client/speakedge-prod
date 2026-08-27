@@ -25,7 +25,7 @@ type KindFilter = (typeof KINDS)[number];
 const KIND_META: Record<string, { label: string; icon: LucideIcon }> = {
   membership: { label: 'Membership', icon: Users },
   subscription: { label: 'Subscription', icon: CreditCard },
-  community: { label: 'Community Class', icon: Users },
+  community: { label: 'Community Classes', icon: Users },
   batch: { label: 'Batch', icon: Users },
   exam: { label: 'Exam', icon: GraduationCap },
   payment: { label: 'Payment', icon: Receipt },

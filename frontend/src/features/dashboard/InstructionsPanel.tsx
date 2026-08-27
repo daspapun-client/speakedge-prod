@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BookText, ChevronDown, Globe, Info, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import { displayHtml } from '@/components/RichTextEditor';
 import { api, unwrap } from '@/lib/api';
 
 /* Instructions section inside the student profile. Content comes from the
@@ -112,9 +113,11 @@ export function InstructionsPanel({ preferredLanguage }: { preferredLanguage?: s
                       This instruction has not been written yet.
                     </p>
                   ) : (
-                    <p className="whitespace-pre-wrap pb-4 text-sm leading-relaxed text-slate-600">
-                      {item.body}
-                    </p>
+                    <div
+                      className="rich-text pb-4 text-sm leading-relaxed text-slate-600"
+                      dir="auto"
+                      dangerouslySetInnerHTML={{ __html: displayHtml(item.body) }}
+                    />
                   )
                 )}
               </div>

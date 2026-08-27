@@ -273,6 +273,81 @@ export function Modal({
   );
 }
 
+export function approveMembership(studentId: string, plan: string) {
+  return unwrap(api.post(`/membership/${studentId}/approve`, null, { params: { plan } }));
+}
+
+/** Pick the membership plan when approving a student from the verification queue. */
+export function ApprovePlanModal({
+  studentName,
+  suggestedPlan,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  studentName: string;
+  suggestedPlan?: string | null;
+  busy?: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: (plan: string) => void;
+}) {
+  const plans = useQuery({
+    queryKey: ['plan-options'],
+    queryFn: () => unwrap<{ plan: string; label: string; enabled?: boolean }[]>(
+      api.get('/payments/plans'),
+    ),
+  });
+  const options = (plans.data ?? []).filter((p) => p.enabled !== false);
+  const [plan, setPlan] = useState(suggestedPlan ?? '');
+
+  useEffect(() => {
+    if (suggestedPlan) setPlan(suggestedPlan);
+  }, [suggestedPlan]);
+
+  return (
+    <Modal onClose={onClose}>
+      <h2 className="text-lg font-bold">Approve membership</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        Choose the membership {studentName} paid for. This is what they will receive once approved.
+      </p>
+      <div className="mt-4">
+        <label className="label" htmlFor="approve-plan">Membership *</label>
+        <select
+          id="approve-plan"
+          className="input"
+          value={plan}
+          onChange={(e) => setPlan(e.target.value)}
+          autoFocus
+        >
+          <option value="" disabled>Select a membership…</option>
+          {options.map((p) => (
+            <option key={p.plan} value={p.plan}>{p.label}</option>
+          ))}
+        </select>
+        {suggestedPlan && (
+          <p className="mt-1 text-xs text-slate-500">
+            Already on this code or account: {options.find((p) => p.plan === suggestedPlan)?.label ?? suggestedPlan}
+          </p>
+        )}
+      </div>
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={busy || !plan}
+          onClick={() => onConfirm(plan)}
+        >
+          {busy ? 'Approving…' : 'Approve'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 /**
  * Authenticated file download (CSV/XLSX exports). Streams the blob through the
  * axios instance so the bearer token is attached, then triggers a browser save.

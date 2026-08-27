@@ -49,6 +49,7 @@ from app.modules.analytics.router import router as analytics_router
 from app.modules.prompt_library.router import router as prompt_library_router
 from app.modules.ai_session.router import router as ai_session_router
 from app.modules.instructions.router import router as instructions_router
+from app.modules.site.router import router as site_router
 
 MODULE_ROUTERS = [
     auth_router, activation_router, membership_router, dashboard_router,
@@ -56,7 +57,7 @@ MODULE_ROUTERS = [
     notification_router, community_router, teacher_router, partner_router,
     exams_router, video_router, leads_router, analytics_router,
     orientation_router, prompt_library_router, ai_session_router,
-    instructions_router,
+    instructions_router, site_router,
 ]
 
 

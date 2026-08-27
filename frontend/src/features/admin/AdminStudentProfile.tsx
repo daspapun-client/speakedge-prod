@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Ban, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Ban, KeyRound, ShieldCheck } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
-import { Column, DataTable, EmailLink, StatCard, StatusBadge, StudentAvatar, PhoneLink, fmtDate, rupees } from './_shared';
+import { ApprovePlanModal, Column, DataTable, EmailLink, Modal, StatCard, StatusBadge, StudentAvatar, PhoneLink, fmtDate, rupees, approveMembership } from './_shared';
 
 interface StudentDetail {
   student_id: string;
@@ -22,9 +22,15 @@ interface StudentDetail {
   photo_url?: string | null;
   id_proof_url?: string | null;
   id_proof_type?: string | null;
-  id_proof_number?: string | null;
+  education_level?: string | null;
+  education_proof_url?: string | null;
+  guardian_name?: string | null;
+  guardian_relationship?: string | null;
+  guardian_phone?: string | null;
+  guardian_email?: string | null;
+  consent_guardian?: boolean;
   referral_code?: string | null;
-  /** Kids/Adults course — fixed by the activation code, admin-changeable only. */
+  /** Kids/Adults section — allocated from age at activation, admin-changeable only. */
   audience?: string;
   teacher_class_locked?: boolean;
   community_locked?: boolean;
@@ -407,6 +413,60 @@ function fmtDuration(totalSeconds: number) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+function ResetPasswordModal({
+  studentId,
+  studentName,
+  onClose,
+  onDone,
+}: {
+  studentId: string;
+  studentName: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [pw, setPw] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const act = useMutation({
+    mutationFn: () => {
+      if (pw.length < 6) throw new Error('Password must be at least 6 characters');
+      if (pw !== confirm) throw new Error('Passwords do not match');
+      return unwrap(api.post('/admin/users/reset-password', { username: studentId, new_password: pw }));
+    },
+    onSuccess: () => { setError(''); onDone(); onClose(); },
+    onError: (e: Error) => setError(e.message),
+  });
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">Reset password</h2>
+        <button type="button" className="btn-ghost py-1 text-xs" onClick={onClose}>Close</button>
+      </div>
+      <p className="mt-2 text-sm text-slate-500">Set a new login password for {studentName}. Share it with them directly — it is not emailed.</p>
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(e) => { e.preventDefault(); act.mutate(); }}
+      >
+        <div>
+          <label className="label" htmlFor="reset-pw">New password</label>
+          <input id="reset-pw" className="input" type="password" autoComplete="new-password" minLength={6} value={pw} onChange={(e) => setPw(e.target.value)} />
+        </div>
+        <div>
+          <label className="label" htmlFor="reset-pw-confirm">Confirm password</label>
+          <input id="reset-pw-confirm" className="input" type="password" autoComplete="new-password" minLength={6} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </div>
+        <div className="flex gap-2">
+          <button type="submit" className="btn-primary" disabled={act.isPending}>
+            {act.isPending ? 'Saving…' : 'Update password'}
+          </button>
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function AdminStudentProfile() {
   const { studentId = '' } = useParams();
   const navigate = useNavigate();
@@ -416,7 +476,10 @@ export function AdminStudentProfile() {
   };
   const qc = useQueryClient();
   const [error, setError] = useState('');
+  const [pwOk, setPwOk] = useState('');
   const [archiveReason, setArchiveReason] = useState('');
+  const [choosingPlan, setChoosingPlan] = useState(false);
+  const [resettingPw, setResettingPw] = useState(false);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['admin-student-profile', studentId],
@@ -430,8 +493,8 @@ export function AdminStudentProfile() {
   };
 
   const approve = useMutation({
-    mutationFn: () => unwrap(api.post(`/membership/${studentId}/approve`)),
-    onSuccess: () => { setError(''); invalidate(); refetch(); },
+    mutationFn: (plan: string) => approveMembership(studentId, plan),
+    onSuccess: () => { setError(''); setChoosingPlan(false); invalidate(); refetch(); },
     onError: (e: Error) => setError(e.message),
   });
 
@@ -449,7 +512,7 @@ export function AdminStudentProfile() {
     onError: (e: Error) => setError(e.message),
   });
 
-  useEffect(() => setError(''), [studentId]);
+  useEffect(() => { setError(''); setPwOk(''); }, [studentId]);
 
   if (isLoading || !data) {
     return (
@@ -559,44 +622,55 @@ export function AdminStudentProfile() {
               <button
                 className="btn-primary"
                 disabled={approve.isPending}
-                onClick={() => { setError(''); approve.mutate(); }}
+                onClick={() => { setError(''); setChoosingPlan(true); }}
               >
-                {approve.isPending ? 'Approving…' : 'Approve membership'}
+                Approve membership
               </button>
             )}
             {data.login.is_active != null && (
-              data.login.is_active === false ? (
+              <>
                 <button
                   type="button"
-                  className="btn-ghost text-green-700"
-                  disabled={blockLogin.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Unblock ${s.full_name}? They will be able to log in again.`)) {
-                      blockLogin.mutate({ active: true });
-                    }
-                  }}
+                  className="btn-ghost"
+                  onClick={() => { setError(''); setPwOk(''); setResettingPw(true); }}
                 >
-                  <ShieldCheck className="mr-1 inline h-4 w-4" />
-                  Unblock login
+                  <KeyRound className="mr-1 inline h-4 w-4" />
+                  Reset password
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-ghost text-red-600"
-                  disabled={blockLogin.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Block ${s.full_name}? They will not be able to log in.`)) {
-                      blockLogin.mutate({ active: false });
-                    }
-                  }}
-                >
-                  <Ban className="mr-1 inline h-4 w-4" />
-                  Block login
-                </button>
-              )
+                {data.login.is_active === false ? (
+                  <button
+                    type="button"
+                    className="btn-ghost text-green-700"
+                    disabled={blockLogin.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Unblock ${s.full_name}? They will be able to log in again.`)) {
+                        blockLogin.mutate({ active: true });
+                      }
+                    }}
+                  >
+                    <ShieldCheck className="mr-1 inline h-4 w-4" />
+                    Unblock login
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-ghost text-red-600"
+                    disabled={blockLogin.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Block ${s.full_name}? They will not be able to log in.`)) {
+                        blockLogin.mutate({ active: false });
+                      }
+                    }}
+                  >
+                    <Ban className="mr-1 inline h-4 w-4" />
+                    Block login
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
+        {pwOk && <p className="mt-3 text-sm text-green-600">{pwOk}</p>}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </div>
 
@@ -616,9 +690,10 @@ export function AdminStudentProfile() {
             <DetailRow label="Email" value={<EmailLink email={s.email} />} />
             <DetailRow label="Phone" value={<PhoneLink phone={s.phone} />} />
             <DetailRow label="WhatsApp" value={<PhoneLink phone={s.whatsapp} />} />
-            <DetailRow label="Age" value={s.age} />
-            <DetailRow label="Gender" value={s.gender} />
             <DetailRow label="Date of birth" value={s.dob} />
+            <DetailRow label="Age (derived)" value={s.age} />
+            <DetailRow label="Gender" value={s.gender} />
+            <DetailRow label="Academic background" value={s.education_level} />
             <DetailRow label="Referral code" value={s.referral_code} />
             <DetailRow label="Login username" value={data.login.username} />
             <DetailRow label="Login active" value={data.login.is_active == null ? '—' : data.login.is_active ? 'Yes' : 'No'} />
@@ -636,13 +711,13 @@ export function AdminStudentProfile() {
           {s.reject_reason && (
             <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">Reject reason: {s.reject_reason}</p>
           )}
-          <div className="mt-4">
+          {/* Verification documents — admin-only, never exposed to members. */}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <DetailRow
-              label="ID proof"
+              label="Identity proof (private)"
               value={
                 <span>
                   {s.id_proof_type ?? '—'}
-                  {s.id_proof_number ? ` · ${s.id_proof_number}` : ''}
                   {s.id_proof_url && (
                     <a href={s.id_proof_url} target="_blank" rel="noreferrer" className="ml-2 text-brand underline">
                       View document
@@ -651,7 +726,30 @@ export function AdminStudentProfile() {
                 </span>
               }
             />
+            <DetailRow
+              label="Academic proof (private)"
+              value={
+                s.education_proof_url ? (
+                  <a href={s.education_proof_url} target="_blank" rel="noreferrer" className="text-brand underline">
+                    View document
+                  </a>
+                ) : '—'
+              }
+            />
           </div>
+          {s.guardian_name && (
+            <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                Parent / legal guardian
+              </h3>
+              <dl className="mt-2 grid gap-3 sm:grid-cols-2">
+                <DetailRow label="Name" value={s.guardian_name} />
+                <DetailRow label="Relationship" value={s.guardian_relationship} />
+                <DetailRow label="Mobile" value={<PhoneLink phone={s.guardian_phone} />} />
+                <DetailRow label="Email" value={<EmailLink email={s.guardian_email} />} />
+              </dl>
+            </div>
+          )}
           <div className="mt-5 border-t border-slate-100 pt-4">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Consents</h3>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -660,6 +758,7 @@ export function AdminStudentProfile() {
               <ConsentPill label="Safety" ok={s.consent_safety_policy} />
               <ConsentPill label="Non-refund" ok={s.consent_non_refund} />
               <ConsentPill label="Process" ok={s.consent_process} />
+              {s.guardian_name && <ConsentPill label="Guardian" ok={s.consent_guardian} />}
             </div>
           </div>
         </Section>
@@ -864,6 +963,24 @@ export function AdminStudentProfile() {
             </button>
           </div>
         </Section>
+      )}
+      {choosingPlan && (
+        <ApprovePlanModal
+          studentName={s.full_name}
+          suggestedPlan={data.active_subscription?.plan}
+          busy={approve.isPending}
+          error={error}
+          onClose={() => setChoosingPlan(false)}
+          onConfirm={(plan) => approve.mutate(plan)}
+        />
+      )}
+      {resettingPw && (
+        <ResetPasswordModal
+          studentId={studentId}
+          studentName={s.full_name}
+          onClose={() => setResettingPw(false)}
+          onDone={() => setPwOk('Password updated.')}
+        />
       )}
     </div>
   );

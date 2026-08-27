@@ -29,28 +29,9 @@ export function TermsAgreement({
 }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-      <h3 className="text-sm font-bold text-slate-900">Terms &amp; Conditions</h3>
-      <ul className="mt-2 space-y-1.5 text-sm leading-relaxed text-slate-600">
-        <li>
-          Fees are payable in advance. Any admission or membership fee shown here is a one-time
-          charge; a monthly fee, where applicable, is billed separately from your class start date.
-        </li>
-        <li>
-          Cancellations and refunds are governed by our{' '}
-          <PolicyLink to="/refund-policy">Cancellation &amp; Refund Policy</PolicyLink>.
-        </li>
-        <li>
-          Community and class participation are subject to the{' '}
-          <PolicyLink to="/community-rules">Speaking Community Rules</PolicyLink> and the{' '}
-          <PolicyLink to="/safety-policy">Community Safety Policy</PolicyLink>.
-        </li>
-        <li>
-          Your personal information is handled per our{' '}
-          <PolicyLink to="/privacy">Privacy Policy</PolicyLink>.
-        </li>
-      </ul>
-
-      <label className="mt-4 flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
+      {/* Just the acceptance line — the policies themselves are one click away
+          rather than restated as a wall of bullets above the Pay button. */}
+      <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
         <input
           type="checkbox"
           className="mt-0.5 h-4 w-4 shrink-0"

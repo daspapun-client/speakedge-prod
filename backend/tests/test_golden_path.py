@@ -3,12 +3,13 @@ seed admin -> generate code -> activate membership -> pending -> approve
 -> student login -> dashboard -> pay (test order) -> verify -> invoice.
 """
 import io
+from datetime import date
 
 import pytest
 from PIL import Image
 
 from app.core.security import Role, hash_password
-from app.db.models import User
+from app.db.models import Subscription, User
 
 pytestmark = pytest.mark.asyncio
 
@@ -23,18 +24,20 @@ def _png() -> bytes:
 PNG = _png()
 
 # Everything the registration form requires, minus the code and the files.
+# Age and the Kids/Adult section are derived from the date of birth.
 ACTIVATION_FORM = {
     "full_name": "Asha Rao",
     "password": "Student@123",
     "email": "asha@example.com",
-    "age": "27",
+    "dob": f"{date.today().year - 27}-01-01",
     "gender": "Female",
     "phone": "9990001111",
     "address": "1 Park St",
     "state": "WB",
     "district": "Kolkata",
     "pin_code": "700001",
-    "id_proof_type": "Aadhaar Card",
+    "id_proof_type": "Masked Aadhaar",
+    "education_level": "Graduate",
     "consent_community_rules": "true",
     "consent_terms": "true",
     "consent_safety_policy": "true",
@@ -44,6 +47,7 @@ ACTIVATION_FORM = {
 ACTIVATION_FILES = {
     "photo": ("p.png", PNG, "image/png"),
     "id_proof": ("id.png", PNG, "image/png"),
+    "education_proof": ("edu.png", PNG, "image/png"),
 }
 
 
@@ -159,3 +163,31 @@ async def test_rbac_student_cannot_generate_codes(client):
     # No token -> 401
     r = await client.post("/api/v1/activation-codes/generate", json={"count": 1})
     assert r.status_code == 401
+
+
+async def test_approve_starts_the_chosen_plan(client):
+    """Cash / offline sales: admin picks the plan at approval and it starts."""
+    await _make_admin()
+    r = await client.post("/api/v1/auth/login",
+                          json={"username": "admin@speakedge.in", "password": "Admin@12345"})
+    ah = {"Authorization": f"Bearer {r.json()['data']['access_token']}"}
+    r = await client.post("/api/v1/activation-codes/generate", json={"count": 1}, headers=ah)
+    code = r.json()["data"]["codes"][0]
+    r = await client.post("/api/v1/membership/activate",
+                          data={"code": code, **ACTIVATION_FORM}, files=ACTIVATION_FILES)
+    assert r.status_code == 200, r.text
+
+    r = await client.post(f"/api/v1/membership/{code}/approve", headers=ah,
+                          params={"plan": "NoSuchPlan"})
+    assert r.status_code == 404
+
+    r = await client.post(f"/api/v1/membership/{code}/approve", headers=ah,
+                          params={"plan": "Silver"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["membership_status"] == "Active"
+    assert r.json()["data"]["plan"] == "Silver"
+
+    sub = await Subscription.find_one(
+        Subscription.student_id == code, Subscription.is_active == True  # noqa: E712
+    )
+    assert sub is not None and sub.plan == "Silver"

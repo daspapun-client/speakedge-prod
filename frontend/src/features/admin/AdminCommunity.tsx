@@ -697,7 +697,7 @@ export function AdminCommunity() {
   return (
     <div>
       <PageHeader
-        title="Community Class Management"
+        title="Community Classes Management"
         description="Join requests, community class moderation, and post-class attendance."
         actions={tab === 'classes' ? (
           <button type="button" className="btn-primary inline-flex items-center gap-1.5" onClick={() => setCreating(true)}>

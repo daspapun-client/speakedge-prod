@@ -8,9 +8,11 @@ from app.db.models import User
 from app.modules.auth import service
 from app.modules.auth.schemas import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     MeOut,
     RefreshRequest,
+    ResetPasswordRequest,
 )
 from app.shared.audit import log_activity
 
@@ -44,6 +46,26 @@ async def change_password(body: ChangePasswordRequest, user: CurrentUser = Depen
     await service.change_password(user.subject, body.old_password, body.new_password)
     await log_activity(user.subject, "auth.change_password", role=user.role.value)
     return ok(message="Password changed")
+
+
+@router.post("/forgot-password", dependencies=[Depends(_auth_limit)])
+async def forgot_password(body: ForgotPasswordRequest):
+    """Mail a reset link. Answers the same either way so an unknown account
+    cannot be told apart from a known one."""
+    await service.request_password_reset(body.username)
+    return ok(message="If that account exists, a password reset link has been emailed to it.")
+
+
+@router.post("/reset-password", dependencies=[Depends(_auth_limit)])
+async def reset_password(body: ResetPasswordRequest, request: Request):
+    user = await service.reset_password(body.token, body.new_password)
+    await log_activity(
+        user.student_id or user.username,
+        "auth.reset_password",
+        role=user.role.value,
+        ip=request.client.host if request.client else None,
+    )
+    return ok(message="Password reset. You can now sign in with your new password.")
 
 
 @router.get("/me", response_model=None)

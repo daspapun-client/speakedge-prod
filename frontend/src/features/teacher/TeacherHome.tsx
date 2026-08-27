@@ -288,7 +288,7 @@ export function TeacherHome() {
             {a.pending_join_requests > 0 && (
               <MetaChip to="/teacher/batches">
                 <UserPlus size={13} className="text-brand" />
-                {a.pending_join_requests} join request{a.pending_join_requests === 1 ? '' : 's'}
+                {a.pending_join_requests} join request{a.pending_join_requests === 1 ? '' : 's'} with admin
               </MetaChip>
             )}
             {data.pending_attendance_approvals > 0 && (
@@ -524,7 +524,7 @@ export function TeacherHome() {
                     {pending > 0 && (
                       <span className="badge bg-amber-100 text-amber-700">
                         <UserPlus size={12} className="mr-1 inline" />
-                        {pending} pending
+                        {pending} awaiting admin
                       </span>
                     )}
                   </div>

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
-  Bell, BadgeCheck, CalendarCheck, CreditCard, User, Video, Users, GraduationCap,
+  Bell, BadgeCheck, BookOpen, CalendarCheck, CreditCard, User, Video, Users, GraduationCap,
   Award, Gift, Settings, CalendarClock, UserPlus, ArrowRight, Layers, ChevronRight,
   Sparkles, type LucideIcon,
 } from 'lucide-react';
@@ -9,6 +9,13 @@ import { Link } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { StatusBadge, badgeClass, fmtDay } from '@/features/admin/_shared';
 import { StudentEnrolledBatchCard } from '@/features/batch/shared';
+import { PwaInstallSection } from '@/components/PwaInstallButton';
+import { DashboardOffersSection } from '@/features/dashboard/DashboardOffersSection';
+import { UpgradePlanCta } from '@/features/dashboard/UpgradePlanCta';
+import { useActivationOptions } from '@/features/membership/ActivatePage';
+import {
+  MEMBERSHIP_INCLUDES, SPEAKEDGE_BOOK_INCLUDED, planBenefits, type PlanBenefitDims,
+} from '@/lib/membership';
 
 interface Dashboard {
   student_id: string;
@@ -17,8 +24,20 @@ interface Dashboard {
   membership_status: string;
   cefr_status: string;
   cefr_level?: string | null;
-  subscription?: { plan: string; expires_at: string } | null;
+  subscription?: Subscription | null;
   unread_notifications: number;
+}
+
+/** The membership in force. `pending_plan` is a change that has been paid for
+ *  (an upgrade) or requested (a downgrade) and takes over on `pending_plan_at`;
+ *  until then this plan and its benefits are what the student holds. */
+interface Subscription {
+  plan: string;
+  expires_at: string;
+  pending_plan?: string | null;
+  pending_plan_at?: string | null;
+  /** Set only for an upgrade — that is the one that was paid for. */
+  pending_payment_id?: string | null;
 }
 
 interface Membership {
@@ -31,13 +50,9 @@ interface Membership {
   reject_reason?: string | null;
 }
 
-const BENEFITS = [
-  'Lifetime Student ID & membership',
-  'Access to the Speaking Community',
-  'Complimentary CEFR & Speaking tests',
-  'Learning videos',
-  'Exclusive member offers',
-];
+interface PlanCatalogueEntry extends PlanBenefitDims {
+  label: string;
+}
 
 function StatTile({
   label,
@@ -123,7 +138,7 @@ function MobileOverview({
   membershipStatus: string;
   cefrLabel: string;
   membershipHint?: string;
-  subscription?: { plan: string; expires_at: string } | null;
+  subscription?: Subscription | null;
   unread: number;
 }) {
   const membershipSub = [cefrLabel, membershipHint].filter(Boolean).join(' · ');
@@ -141,7 +156,11 @@ function MobileOverview({
           icon={CreditCard}
           label="Subscription"
           value={<span className="text-sm font-bold text-slate-900">{subscription.plan}</span>}
-          sub={`Expires ${fmtDay(subscription.expires_at)}`}
+          sub={
+            subscription.pending_plan
+              ? `${subscription.pending_plan} starts ${fmtDay(subscription.pending_plan_at)}`
+              : `Expires ${fmtDay(subscription.expires_at)}`
+          }
           to="/dashboard/subscription"
         />
       ) : (
@@ -171,10 +190,10 @@ function MobileOverview({
 
 function MetaChip({ children, to }: { children: ReactNode; to?: string }) {
   const cls =
-    'inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm backdrop-blur-sm';
+    'inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-slate-200/70 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-sm sm:rounded-full sm:py-1.5';
   if (to) {
     return (
-      <Link to={to} className={`${cls} transition active:scale-95 hover:border-brand/30 hover:text-brand`}>
+      <Link to={to} className={`${cls} transition active:scale-[0.98] hover:border-brand/30 hover:text-brand`}>
         {children}
       </Link>
     );
@@ -182,9 +201,27 @@ function MetaChip({ children, to }: { children: ReactNode; to?: string }) {
   return <span className={cls}>{children}</span>;
 }
 
+function HeroStatusPill({ status }: { status: string }) {
+  const s = status.toLowerCase();
+  const tone =
+    ['active', 'approved', 'verified'].some((k) => s.includes(k))
+      ? 'bg-emerald-400/25 text-emerald-50 ring-emerald-300/35'
+      : ['pending', 'review'].some((k) => s.includes(k))
+        ? 'bg-amber-400/25 text-amber-50 ring-amber-300/35'
+        : 'bg-white/20 text-white/90 ring-white/25';
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ring-1 backdrop-blur-sm ${tone}`}
+    >
+      {status}
+    </span>
+  );
+}
+
 function ResubmitForm() {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ full_name: '', phone: '', whatsapp: '', email: '', address: '', about_me: '', cefr_level: '' });
+  const options = useActivationOptions();
+  const [form, setForm] = useState({ full_name: '', phone: '', whatsapp: '', email: '', address: '', about_me: '', cefr_level: '', dob: '', education_level: '' });
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -218,7 +255,21 @@ function ResubmitForm() {
         <div><label className="label">Email</label><input className="input" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></div>
         <div className="sm:col-span-2"><label className="label">Address</label><input className="input" value={form.address} onChange={(e) => set('address', e.target.value)} /></div>
         <div className="sm:col-span-2"><label className="label">About me</label><textarea className="input" rows={2} value={form.about_me} onChange={(e) => set('about_me', e.target.value)} /></div>
-        <div><label className="label">CEFR level</label><input className="input" value={form.cefr_level} onChange={(e) => set('cefr_level', e.target.value)} /></div>
+        <div><label className="label">CEFR Speaking Level</label><input className="input" value={form.cefr_level} onChange={(e) => set('cefr_level', e.target.value)} /></div>
+        <div>
+          <label className="label">Date of Birth</label>
+          <input className="input" type="date" value={form.dob} onChange={(e) => set('dob', e.target.value)} />
+          <p className="mt-1 text-xs text-slate-500">Your age and section are recalculated from this.</p>
+        </div>
+        <div>
+          <label className="label">Academic / Educational Background</label>
+          <select className="input" value={form.education_level} onChange={(e) => set('education_level', e.target.value)}>
+            <option value="">Keep unchanged</option>
+            {options.academic_levels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </div>
       </div>
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       <button className="btn-primary mt-4 w-full sm:w-auto" disabled={submit.isPending} onClick={() => submit.mutate()}>Resubmit</button>
@@ -231,6 +282,9 @@ interface Booking {
   exam_id: string;
   status: string;
   created_at: string;
+  exam_title?: string | null;
+  kind?: string | null;
+  scheduled_at?: string | null;
 }
 
 interface JoinRequest {
@@ -256,11 +310,10 @@ interface EnrolledBatch {
 
 const QUICK_LINKS: { to: string; label: string; icon: LucideIcon; needsSub?: boolean }[] = [
   { to: '/dashboard/profile', label: 'Profile', icon: User },
-  { to: '/dashboard/learning', label: 'Learning', icon: Sparkles },
   { to: '/dashboard/subscription', label: 'Subscription', icon: CreditCard },
   { to: '/dashboard/videos', label: 'Videos', icon: Video },
   { to: '/dashboard/attendance', label: 'Attendance', icon: CalendarCheck },
-  { to: '/dashboard/community', label: 'Community Class', icon: Users },
+  { to: '/dashboard/community', label: 'Community Classes', icon: Users },
   { to: '/dashboard/exams', label: 'Exams', icon: GraduationCap, needsSub: true },
   { to: '/dashboard/reports', label: 'Reports', icon: Award },
   { to: '/dashboard/payments', label: 'Payments', icon: CreditCard },
@@ -272,7 +325,9 @@ const QUICK_LINKS: { to: string; label: string; icon: LucideIcon; needsSub?: boo
 function DashboardSkeleton() {
   return (
     <div className="animate-pulse space-y-4 sm:space-y-6">
-      <div className="h-44 rounded-2xl bg-slate-200 sm:h-36 sm:rounded-xl" />
+      <div className="-mx-3 sm:mx-0">
+        <div className="mx-3 h-48 rounded-[1.25rem] bg-slate-200 sm:mx-0 sm:h-36 sm:rounded-xl" />
+      </div>
       <div className="overflow-hidden rounded-xl border border-slate-200 sm:hidden">
         {[1, 2, 3].map((i) => (
           <div key={i} className="flex items-center gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-0">
@@ -288,6 +343,29 @@ function DashboardSkeleton() {
         {[1, 2, 3].map((i) => <div key={i} className="h-32 rounded-xl bg-slate-200" />)}
       </div>
       <div className="h-48 rounded-xl bg-slate-200" />
+    </div>
+  );
+}
+
+function HeroPhoto({ url, name }: { url?: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [url]);
+  const show = Boolean(url) && !failed;
+  return (
+    <div className="shrink-0 rounded-[1.1rem] bg-gradient-to-br from-white/50 to-brand-gold/50 p-[2px] shadow-[0_8px_24px_rgba(0,0,0,0.18)] sm:rounded-full sm:p-[3px]">
+      {show ? (
+        <img
+          src={url!}
+          alt=""
+          className="h-[4.25rem] w-[4.25rem] rounded-[0.95rem] object-cover sm:h-20 sm:w-20 sm:rounded-full"
+          onError={() => setFailed(true)}
+          onLoad={(e) => { if (e.currentTarget.naturalWidth === 0) setFailed(true); }}
+        />
+      ) : (
+        <div className="flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-[0.95rem] bg-white/20 text-2xl font-bold backdrop-blur-sm sm:h-20 sm:w-20 sm:rounded-full">
+          {name[0]?.toUpperCase()}
+        </div>
+      )}
     </div>
   );
 }
@@ -327,6 +405,13 @@ export function DashboardHome() {
     queryFn: () => unwrap<{ status: string }>(api.get('/orientation/me')),
     enabled: data?.membership_status === 'Active',
   });
+  // The benefits panel lists what this member actually bought, so it needs the
+  // catalogue entry for their plan — the same source /plans and checkout use.
+  const { data: plans = [] } = useQuery({
+    queryKey: ['plans'],
+    queryFn: () => unwrap<PlanCatalogueEntry[]>(api.get('/payments/plans')),
+    enabled: !!data?.subscription,
+  });
   const respond = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'approve' | 'decline' }) =>
       unwrap(api.post(`/community/teams/join-requests/${id}/${action}`, {})),
@@ -335,6 +420,12 @@ export function DashboardHome() {
 
   if (isLoading) return <DashboardSkeleton />;
   if (!data) return null;
+
+  // Until the catalogue resolves (or for a member whose plan has since been
+  // removed from it) show only what every membership includes, rather than a
+  // generic list that may not match what they bought.
+  const activePlan = plans.find((p) => p.plan === data.subscription?.plan);
+  const benefits = activePlan ? planBenefits(activePlan) : MEMBERSHIP_INCLUDES;
 
   const upcoming = (bookings ?? []).filter((b) => b.status === 'booked');
   const notApproved = data.membership_status !== 'Active';
@@ -353,64 +444,70 @@ export function DashboardHome() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Welcome hero — full-bleed on mobile */}
-      <div className="-mx-3 overflow-hidden rounded-none border-0 bg-white shadow-none sm:mx-0 sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm">
-        <div className="relative bg-gradient-to-br from-brand via-brand to-brand-light px-4 pb-5 pt-5 text-white sm:px-8 sm:py-6">
-          <div
-            className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/10 blur-2xl"
-            aria-hidden
-          />
-          <div className="relative flex items-start gap-3.5 sm:gap-5">
-            {data.photo_url ? (
-              <img
-                src={data.photo_url}
-                alt=""
-                className="h-14 w-14 shrink-0 rounded-2xl border-2 border-white/30 object-cover shadow-lg sm:h-20 sm:w-20 sm:rounded-full sm:border-4"
-              />
-            ) : (
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border-2 border-white/30 bg-white/20 text-xl font-bold shadow-lg sm:h-20 sm:w-20 sm:rounded-full sm:border-4 sm:text-2xl">
-                {data.full_name?.[0]?.toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0 flex-1 pt-0.5">
-              <p className="text-xs font-medium text-white/75 sm:text-sm sm:text-white/80">Student dashboard</p>
-              <h1 className="mt-0.5 text-xl font-extrabold leading-tight sm:text-3xl">
-                Hi, {firstName}
-              </h1>
-              <p className="mt-1 truncate font-mono text-[11px] text-white/65 sm:text-sm sm:text-white/70">{data.student_id}</p>
-              <div className="mt-2.5 sm:hidden">
-                <StatusBadge status={data.membership_status} />
-              </div>
+      {/* Welcome hero — floating card on mobile */}
+      <div className="-mx-3 sm:mx-0">
+        <div className="mx-3 overflow-hidden rounded-[1.25rem] shadow-[0_12px_40px_rgba(47,128,237,0.2)] ring-1 ring-brand/10 sm:mx-0 sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm sm:ring-0">
+          <div className="relative overflow-hidden bg-gradient-to-br from-[#1557b0] via-brand to-brand-light px-4 pb-4 pt-4 text-white sm:px-8 sm:py-6">
+            <div className="pointer-events-none absolute inset-0" aria-hidden>
+              <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-white/15 blur-3xl" />
+              <div className="absolute -bottom-12 -left-6 h-28 w-28 rounded-full bg-brand-gold/25 blur-2xl" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.14),transparent_45%)]" />
+              <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_40%,rgba(255,255,255,0.06)_100%)]" />
             </div>
-            <div className="hidden shrink-0 sm:block">
-              <StatusBadge status={data.membership_status} />
+
+            <div className="relative space-y-3.5 sm:space-y-0">
+              <div className="flex items-center justify-between gap-2 sm:hidden">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-white/90 ring-1 ring-white/20 backdrop-blur-sm">
+                  <Sparkles size={11} className="shrink-0 text-brand-gold" />
+                  Student dashboard
+                </span>
+                <HeroStatusPill status={data.membership_status} />
+              </div>
+
+              <div className="flex items-center gap-3.5 sm:items-start sm:gap-5">
+                <HeroPhoto url={data.photo_url} name={data.full_name} />
+
+                <div className="min-w-0 flex-1">
+                  <p className="hidden text-sm font-medium text-white/80 sm:block">Student dashboard</p>
+                  <h1 className="text-[1.65rem] font-extrabold leading-[1.15] tracking-tight sm:mt-0.5 sm:text-3xl">
+                    Hi, {firstName}
+                  </h1>
+                  <p className="mt-1 truncate font-mono text-[11px] text-white/70 sm:text-sm sm:text-white/70">
+                    {data.student_id}
+                  </p>
+                </div>
+
+                <div className="hidden shrink-0 sm:block">
+                  <StatusBadge status={data.membership_status} />
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="border-t border-slate-100 bg-slate-50/80 px-3 py-3 sm:px-8 sm:py-4">
-          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <MetaChip>
-              <GraduationCap size={13} className="text-brand" />
-              {cefrLabel}
-            </MetaChip>
-            {data.subscription ? (
+          <div className="border-t border-slate-100/90 bg-white px-3 py-3 sm:bg-slate-50/80 sm:px-8 sm:py-4">
+            <div className="flex flex-wrap gap-2 sm:-mx-1 sm:flex-nowrap sm:gap-2 sm:overflow-x-auto sm:px-1 sm:pb-0.5 sm:[scrollbar-width:none] sm:[&::-webkit-scrollbar]:hidden">
               <MetaChip>
-                <CreditCard size={13} className="text-brand" />
-                {data.subscription.plan} · {fmtDay(data.subscription.expires_at)}
+                <GraduationCap size={13} className="text-brand" />
+                {cefrLabel}
               </MetaChip>
-            ) : (
-              <MetaChip to="/plans">
-                <CreditCard size={13} className="text-brand" />
-                No plan · View plans
-              </MetaChip>
-            )}
-            {data.unread_notifications > 0 && (
-              <MetaChip to="/dashboard/notifications">
-                <Bell size={13} className="text-brand" />
-                {data.unread_notifications} unread
-              </MetaChip>
-            )}
+              {data.subscription ? (
+                <MetaChip>
+                  <CreditCard size={13} className="text-brand" />
+                  {data.subscription.plan} · {fmtDay(data.subscription.expires_at)}
+                </MetaChip>
+              ) : (
+                <MetaChip to="/plans">
+                  <CreditCard size={13} className="text-brand" />
+                  No plan · View plans
+                </MetaChip>
+              )}
+              {data.unread_notifications > 0 && (
+                <MetaChip to="/dashboard/notifications">
+                  <Bell size={13} className="text-brand" />
+                  {data.unread_notifications} unread
+                </MetaChip>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -510,6 +607,12 @@ export function DashboardHome() {
               <>
                 <p className="text-xl font-extrabold text-brand">{data.subscription.plan}</p>
                 <p className="mt-1 text-sm text-slate-500">Expires {fmtDay(data.subscription.expires_at)}</p>
+                {data.subscription.pending_plan && (
+                  <p className="mt-1 text-sm font-semibold text-amber-700">
+                    {data.subscription.pending_plan} starts{' '}
+                    {fmtDay(data.subscription.pending_plan_at)}
+                  </p>
+                )}
               </>
             ) : (
               <div>
@@ -575,6 +678,39 @@ export function DashboardHome() {
         </div>
       </section>
 
+      <DashboardOffersSection enabled={!notApproved} />
+
+      {/* A paid upgrade that starts on a later date is the one case where the
+          plan on the dashboard is deliberately not the plan just bought — say
+          so here, and stop offering another upgrade until this one is in. */}
+      {!notApproved && data.subscription?.pending_plan && (
+        <div className="card flex flex-wrap items-start justify-between gap-4 border-amber-200 bg-amber-50">
+          <div className="flex gap-3">
+            <CalendarClock size={20} className="mt-0.5 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold text-slate-800">
+                {data.subscription.pending_payment_id ? 'Upgrade scheduled' : 'Downgrade scheduled'}
+                {' — '}
+                {data.subscription.pending_plan} starts {fmtDay(data.subscription.pending_plan_at)}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                Your {data.subscription.plan} membership and its benefits continue until then
+                {data.subscription.pending_payment_id
+                  ? ' — that is the activation date chosen at checkout'
+                  : ' — the change takes effect from your next monthly cycle'}
+                . From that date the {data.subscription.pending_plan} membership takes over
+                automatically, with the benefits you have already used deducted from it.
+              </p>
+            </div>
+          </div>
+          <Link to="/dashboard/subscription" className="btn-ghost">
+            View details
+          </Link>
+        </div>
+      )}
+
+      {!notApproved && data.subscription && !data.subscription.pending_plan && <UpgradePlanCta />}
+
       {enrolledBatches.length > 0 && (
         <section className="space-y-3 sm:space-y-4">
           <div className="flex items-center justify-between gap-3">
@@ -632,7 +768,14 @@ export function DashboardHome() {
               <ul className="mt-3 divide-y divide-slate-100 sm:mt-4">
                 {upcoming.map((b) => (
                   <li key={b.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                    <span className="truncate font-mono text-xs text-slate-700 sm:text-sm">{b.exam_id}</span>
+                    <div className="min-w-0 flex-1">
+                      <span className="truncate text-xs font-medium text-slate-700 sm:text-sm">
+                        {b.exam_title ?? b.exam_id}
+                      </span>
+                      {b.scheduled_at && (
+                        <p className="truncate text-[11px] text-slate-500">{fmtDay(b.scheduled_at)}</p>
+                      )}
+                    </div>
                     <span className={`badge shrink-0 ${badgeClass(b.status)}`}>{b.status}</span>
                   </li>
                 ))}
@@ -660,27 +803,48 @@ export function DashboardHome() {
           </div>
         </div>
 
-        <div className="card h-fit p-4 sm:p-5">
-          <h2 className="font-bold text-slate-900">Membership benefits</h2>
-          <p className="mt-1 text-xs text-slate-500 sm:text-sm">Included with your SpeakEdge membership</p>
-          <ul className="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3">
-            {BENEFITS.map((b) => (
-              <li key={b} className="flex gap-2.5 text-sm text-slate-600 sm:gap-3">
-                <span className="mt-0.5 shrink-0 rounded-full bg-brand/10 p-1 text-brand">
-                  <BadgeCheck size={14} />
-                </span>
-                <span className="leading-snug">{b}</span>
-              </li>
-            ))}
-          </ul>
-          <Link
-            to="/dashboard/subscription"
-            className="mt-4 flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3 text-sm font-semibold text-brand transition active:scale-[0.99] hover:border-brand/20 hover:bg-brand/5 sm:hidden"
-          >
-            Manage subscription
-            <ChevronRight size={16} />
-          </Link>
+        <div className="space-y-4 sm:space-y-6">
+          <div className="card h-fit p-4 sm:p-5">
+            <h2 className="font-bold text-slate-900">Membership benefits</h2>
+            <p className="mt-1 text-xs text-slate-500 sm:text-sm">
+              {activePlan
+                ? `Included with your ${activePlan.label} membership`
+                : 'Included with your SpeakEdge membership'}
+            </p>
+            {/* Mirrors the chip on the /plans card, so the dashboard lists exactly
+                what the Membership Plans page lists for the same plan. */}
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-brand-gold/10 px-3 py-2 text-sm font-semibold text-brand">
+              <BookOpen size={16} className="shrink-0" /> {SPEAKEDGE_BOOK_INCLUDED}
+            </div>
+            <ul className="mt-3 space-y-2.5 sm:space-y-3">
+              {benefits.map((b) => (
+                <li key={b} className="flex gap-2.5 text-sm text-slate-600 sm:gap-3">
+                  <span className="mt-0.5 shrink-0 rounded-full bg-brand/10 p-1 text-brand">
+                    <BadgeCheck size={14} />
+                  </span>
+                  <span className="leading-snug">{b}</span>
+                </li>
+              ))}
+            </ul>
+            {/* Limited access: the plan's facilities are listed in full, but the
+                ones needing a verified membership are not usable yet. */}
+            {notApproved && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-snug text-amber-800">
+                These are the facilities of your membership plan. The ones that need a verified
+                membership stay restricted until your verification is approved.
+              </p>
+            )}
+            <Link
+              to="/dashboard/subscription"
+              className="mt-4 flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3 text-sm font-semibold text-brand transition active:scale-[0.99] hover:border-brand/20 hover:bg-brand/5 sm:hidden"
+            >
+              Manage subscription
+              <ChevronRight size={16} />
+            </Link>
+          </div>
         </div>
+
+        <PwaInstallSection className="lg:col-span-3" />
       </div>
     </div>
   );

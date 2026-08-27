@@ -7,7 +7,7 @@ from typing import ClassVar, Optional
 
 import pymongo
 from beanie import Document, Indexed
-from pydantic import EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.core.security import Role
 from app.db.base import AuditedDocument, utcnow
@@ -105,6 +105,11 @@ class User(AuditedDocument):
     is_active: bool = True
     student_id: Optional[str] = None  # link to Student when role == student
     last_login_at: Optional[datetime] = None
+    # Staff contact number. For examiners this is published to the student on
+    # every slot they are assigned to, so the learner can reach them before the
+    # test (Module 11) — admin sets it from Exams -> Examiners.
+    phone: Optional[str] = None
+    whatsapp: Optional[str] = None
 
     class Settings:
         name = "users"
@@ -129,6 +134,9 @@ class ActivationCode(AuditedDocument):
     # activation turns it into the student's first Subscription.
     plan: Optional[str] = None
     plan_months: Optional[int] = None
+    # True when the buyer also paid the first monthly fee upfront, so the
+    # Subscription created at activation starts its schedule a month later.
+    first_month_included: bool = False
 
     class Settings:
         name = "activation_codes"
@@ -154,9 +162,19 @@ class Student(AuditedDocument):
     pin_code: Optional[str] = None
     about_me: Optional[str] = None
     photo_url: Optional[str] = None
+    # Verification documents. Both are PRIVATE: they exist for identity and
+    # membership verification only and are never surfaced on any member-facing
+    # endpoint (the community directory reads CommunityProfile, not this doc).
     id_proof_url: Optional[str] = None
     id_proof_type: Optional[str] = None    # one of ID_PROOF_TYPES (see membership/router.py)
-    id_proof_number: Optional[str] = None  # as printed on the document (optional)
+    education_level: Optional[str] = None  # one of ACADEMIC_LEVELS (membership/router.py)
+    education_proof_url: Optional[str] = None
+    # --- Parent / legal guardian (mandatory below MINOR_AGE, i.e. under 18) ---
+    guardian_name: Optional[str] = None
+    guardian_relationship: Optional[str] = None
+    guardian_phone: Optional[str] = None
+    guardian_email: Optional[str] = None
+    consent_guardian: bool = False
     referral_code: Optional[str] = None
     membership_status: MembershipStatus = MembershipStatus.pending
     cefr_status: CEFRStatus = CEFRStatus.self_declared
@@ -373,15 +391,49 @@ class ClassAttendance(AuditedDocument):
 # ---------------------------------------------------------------------------
 # Payments / subscription
 # ---------------------------------------------------------------------------
+class BillingDetails(BaseModel):
+    """Contact + address captured on a checkout form. The membership checkout
+    collects the same fields the book checkout does (BookOrder stores its own
+    copy because it also ships from them); a subscription has nothing to ship,
+    so the details are kept on the Payment as the billing record."""
+    name: str
+    phone: str
+    alt_phone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    landmark: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    pin_code: Optional[str] = None
+
+
 class Payment(AuditedDocument):
     student_id: str
-    kind: str = "subscription"  # subscription | book | exam | monthly
+    kind: str = "subscription"  # subscription | book | exam | monthly | general
     plan: Optional[str] = None
+    # Membership upgrade: the tier being left and the eligible previous
+    # admission fee credited against the new one. `amount` is already net of it,
+    # so the receipt can show the adjustment without recomputing anything.
+    previous_plan: Optional[str] = None
+    upgrade_adjustment: int = 0  # paise
+    # The date the learner chose for the upgraded membership to take over (up
+    # to 30 days out). Until then the membership they already hold runs on.
+    upgrade_activate_on: Optional[datetime] = None
+    # What a kind="general" payment was for — admin picks or types it, and it
+    # is what the receipt prints as the description.
+    purpose: Optional[str] = None
     months: Optional[int] = None  # chosen subscription duration (months) for this order
     due_month: Optional[str] = None  # "YYYY-MM" — which monthly fee this settles (kind="monthly")
+    # Set when the buyer chose to pay their first monthly fee together with the
+    # admission fee. `first_month_amount` is the part of `amount` that covers it.
+    first_month_included: bool = False
+    first_month_amount: int = 0  # paise
     amount: int  # in paise
     currency: str = "INR"
     status: PaymentStatus = PaymentStatus.created
+    paid_at: Optional[datetime] = None  # when the money was confirmed captured
     payment_mode: Optional[str] = None  # razorpay | cash | bank_transfer | upi_manual ...
     transaction_ref: Optional[str] = None  # manual approval reference
     remarks: Optional[str] = None
@@ -395,6 +447,9 @@ class Payment(AuditedDocument):
     # created. Stored as evidence of what the buyer agreed to.
     terms_accepted_at: Optional[datetime] = None
     terms_version: Optional[str] = None
+    # Billing contact + address entered on the membership checkout page. Book
+    # orders keep theirs on the BookOrder (it is a delivery address there).
+    billing: Optional[BillingDetails] = None
     refund_id: Optional[str] = None
     refund_status: Optional[RefundStatus] = None
     # GST-ready architecture (not mandatory in v1)
@@ -448,6 +503,39 @@ class PlanConfig(AuditedDocument):
         name = "plan_configs"
 
 
+class AdmissionOffer(AuditedDocument):
+    """A temporary discounted admission fee for a prospect who has not joined yet.
+
+    Admin picks a plan, an offer price and a validity window (24/48/72h) and the
+    `token` becomes a public payment link. While the offer is live the guest
+    checkout charges `price` in place of the plan's catalogue admission fee;
+    once `expires_at` passes the link stops resolving and the visitor is sent to
+    the ordinary Membership Plans page at the regular price.
+
+    Distinct from `Offer`, which is the dashboard pop-up aimed at students who
+    already hold an account."""
+    token: Indexed(str, unique=True)  # type: ignore  # slug of the payment link
+    plan: str          # PlanConfig key this offer is priced against
+    price: int         # paise — discounted admission fee (replaces the catalogue one)
+    list_price: int    # paise — catalogue fee when the offer was made, kept for reporting
+    valid_hours: int   # 24 | 48 | 72
+    expires_at: datetime
+    # Who it was made out to. Optional and purely for admin's own record — the
+    # link is not tied to them, so anyone holding it can buy at this price.
+    student_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+    # Purchases made on this link, so admin can see whether it converted.
+    uses: int = 0
+    used_at: Optional[datetime] = None
+    order_numbers: list[str] = Field(default_factory=list)
+
+    class Settings:
+        name = "admission_offers"
+
+
 class Subscription(AuditedDocument):
     student_id: Indexed(str)  # type: ignore
     plan: str  # PlanConfig.plan key (free-form so admin can add custom plans)
@@ -459,12 +547,27 @@ class Subscription(AuditedDocument):
     billing_start_at: Optional[datetime] = None
     is_active: bool = True
     months: Optional[int] = None  # duration purchased (months)
+    # The first monthly fee was paid with the admission fee, so the derived due
+    # schedule skips month 1 (see payments.monthly.due_dates).
+    first_month_included: bool = False
     cefr_tests: int = 1       # exam eligibility granted by this plan tier
     speaking_tests: int = 1
     payment_id: Optional[str] = None
     expiry_reminded: bool = False  # set once the 1-month expiry reminder is sent
     # "YYYY-MM" keys whose monthly-fee reminder has already been sent (dedup).
     monthly_reminders_sent: list[str] = Field(default_factory=list)
+    # When this membership's benefits started being consumed. A plan change
+    # carries it over, so the new tier's time-based entitlements (validity,
+    # community/support years) are counted from the *first* start instead of
+    # restarting from zero. Unset on rows written before this existed, where
+    # started_at is the same thing.
+    benefits_start_at: Optional[datetime] = None
+    # A plan change that is paid for / requested but not in force yet: an
+    # upgrade waits for the activation date the learner chose, a downgrade for
+    # the next monthly payment cycle. Applied by the scheduler.
+    pending_plan: Optional[str] = None
+    pending_plan_at: Optional[datetime] = None
+    pending_payment_id: Optional[str] = None  # set for an upgrade, never a downgrade
 
     class Settings:
         name = "subscriptions"
@@ -578,6 +681,11 @@ class BookOrder(AuditedDocument):
     plan: Optional[str] = None          # SubscriptionPlan value
     plan_months: Optional[int] = None   # chosen term
     plan_amount: int = 0                # paise charged for the membership
+    # First monthly fee paid upfront with the admission fee (0 = not included).
+    first_month_amount: int = 0         # paise
+    # New-student offer link this order was bought on (AdmissionOffer.token):
+    # `plan_amount` is then the offer price, not the catalogue admission fee.
+    offer_token: Optional[str] = None
     # Money (paise)
     book_amount: int = 0
     delivery_charge: int = 0
@@ -587,6 +695,10 @@ class BookOrder(AuditedDocument):
     status: OrderStatus = OrderStatus.draft
     status_history: list[dict] = Field(default_factory=list)
     payment_id: Optional[str] = None
+    # True while this order is holding a copy in BookProduct.reserved. Set at
+    # checkout (so two buyers cannot pay for the same last copy) and cleared on
+    # ship/collect/cancel — the one flag every release path checks.
+    stock_reserved: bool = False
     # Fulfilment
     activation_code: Optional[str] = None  # reserved code that ships in the book
     courier_name: Optional[str] = None
@@ -681,6 +793,29 @@ class Batch(AuditedDocument):
         indexes = [[("series_id", pymongo.ASCENDING)]]
 
 
+class OrientationSlotRule(AuditedDocument):
+    """A **weekly** orientation session as admin sets it: a weekday + a start
+    time, e.g. "Sunday - 11:00 AM", repeating every week until it is changed or
+    removed. The dated ``OrientationBatch`` rows students join are generated
+    from it (``app/shared/weekly.py``).
+
+    Live sessions only — a recorded/self-paced session has no start time, so
+    recurrence means nothing to it; those stay one-off batches."""
+    title: str
+    day_of_week: str  # lowercase weekday name, "sunday"
+    time_of_day: str  # "HH:MM" 24h, IST
+    duration_min: int = 45
+    teacher_id: Optional[str] = None  # Teacher.id conducting every occurrence
+    meeting_url: Optional[str] = None
+    agenda: list[str] = Field(default_factory=list)
+
+    class Settings:
+        name = "orientation_slot_rules"
+        indexes = [
+            [("day_of_week", pymongo.ASCENDING), ("time_of_day", pymongo.ASCENDING)],
+        ]
+
+
 class OrientationBatch(AuditedDocument):
     """A scheduled New-Student Orientation session. Admin creates it, assigns a
     teacher and enrols students; the teacher (or admin) marks students complete,
@@ -697,10 +832,16 @@ class OrientationBatch(AuditedDocument):
     student_ids: list[str] = Field(default_factory=list)  # enrolled student_ids
     status: str = "scheduled"  # scheduled | completed | cancelled
     reminded_on: Optional[str] = None  # IST date "YYYY-MM-DD" a reminder was sent (dedup)
+    # Set when this session was generated from a weekly OrientationSlotRule;
+    # None for a one-off session created by hand.
+    rule_id: Optional[str] = None
 
     class Settings:
         name = "orientation_batches"
-        indexes = [[("status", pymongo.ASCENDING), ("scheduled_at", pymongo.ASCENDING)]]
+        indexes = [
+            [("status", pymongo.ASCENDING), ("scheduled_at", pymongo.ASCENDING)],
+            [("rule_id", pymongo.ASCENDING), ("scheduled_at", pymongo.ASCENDING)],
+        ]
 
 
 class BatchMessage(AuditedDocument):
@@ -793,8 +934,20 @@ class Partner(AuditedDocument):
     status: str = "pending"  # pending | under_review | approved | rejected | on_hold | suspended
     remarks: Optional[str] = None
     public_visible: bool = True  # public partner directory
-    microsite_slug: Optional[str] = None  # franchisee microsite (franchisee partners)
     username: Optional[str] = None  # linked login for partner dashboard
+
+    # --- Franchisee microsite (Part E), admin-managed --------------------
+    microsite_slug: Optional[str] = None  # /franchisee/<slug>; franchisee partners only
+    microsite_published: bool = False  # a page exists but stays dark until published
+    about: Optional[str] = None
+    address: Optional[str] = None
+    map_embed_url: Optional[str] = None  # Google Maps embed/share URL
+    logo_url: Optional[str] = None
+    gallery: list[str] = Field(default_factory=list)  # photo URLs under /media
+    # Products shown on the public page / directory card. Empty = every allowed
+    # product, so visibility control is opt-in rather than a second list to keep
+    # in sync with products_allowed.
+    public_products: list[str] = Field(default_factory=list)
 
     class Settings:
         name = "partners"
@@ -805,9 +958,15 @@ class PartnerLead(AuditedDocument):
     partner_id: str
     name: str
     phone: str
-    interest: Optional[str] = None  # product/service interest
+    email: Optional[EmailStr] = None
+    interest: Optional[str] = None  # product/service interest (from products_allowed)
     status: str = "new"  # new | contacted | demo_registered | admission_pending | converted | lost
     notes: Optional[str] = None
+    location: Optional[str] = None
+    source: str = "partner"  # partner | microsite (franchisee page enquiry form)
+    # Append-only status trail — the "View Lead History" the partner dashboard shows.
+    history: list[dict] = Field(default_factory=list)  # [{at, by, from, to, note}]
+    converted_student_id: Optional[str] = None
 
     class Settings:
         name = "partner_leads"
@@ -825,6 +984,11 @@ class PartnerReport(AuditedDocument):
     remarks: Optional[str] = None
     status: str = "pending"  # pending | approved | rejected
     reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    review_remarks: Optional[str] = None
+    # The date the sale/admission actually happened ("YYYY-MM-DD"). Monthly and
+    # yearly reports bucket on this, falling back to created_at when unset.
+    occurred_on: Optional[str] = None
 
     class Settings:
         name = "partner_reports"
@@ -834,14 +998,61 @@ class PartnerReport(AuditedDocument):
 # ---------------------------------------------------------------------------
 # Exams / Video
 # ---------------------------------------------------------------------------
+class ExamSlotRule(AuditedDocument):
+    """A **weekly** exam slot as admin sets it: a weekday + a start time, e.g.
+    "Sunday - 11:00 AM". It repeats every week on that day and time until the
+    admin edits or removes it.
+
+    The rule is the thing admin manages; the bookable ``Exam`` rows are
+    generated from it over a rolling horizon (``exams/service.py``), so
+    everything downstream - bookings, examiner scoping, reports, notifications
+    - keeps working on a concrete dated slot exactly as before."""
+    kind: str = "CEFR"  # CEFR | Speaking
+    title: str
+    day_of_week: str  # lowercase weekday name, "sunday" (matches SpeakingTeam.class_day)
+    time_of_day: str  # "HH:MM" 24h, IST
+    duration_minutes: int = 20
+    capacity: int = 1
+    examiner_id: Optional[str] = None  # User.username of the assigned examiner
+    # Google Meet (or any) link the sitting is conducted on. Copied onto every
+    # date the rule generates, so a weekly slot carries its own room.
+    meeting_url: Optional[str] = None
+
+    class Settings:
+        name = "exam_slot_rules"
+        indexes = [
+            [("kind", pymongo.ASCENDING), ("day_of_week", pymongo.ASCENDING),
+             ("time_of_day", pymongo.ASCENDING)],
+        ]
+
+
 class Exam(AuditedDocument):
+    """One bookable exam *slot*: a kind, a date/time, a length and an examiner.
+
+    Admin builds the slot list day- and time-wise (``POST /exams/slots/bulk``)
+    and assigns an examiner to each; the student booking card renders exactly
+    what the spec lists — exam name, date, slot length, examiner name and the
+    examiner's WhatsApp number, all resolved from here."""
     kind: str = "CEFR"  # CEFR | Speaking
     title: str
     scheduled_at: Optional[datetime] = None
-    examiner_id: Optional[str] = None
+    duration_minutes: int = 20  # length of the slot as allotted by admin
+    capacity: int = 1  # seats in this slot; a 1:1 oral test keeps the default
+    examiner_id: Optional[str] = None  # User.username of the assigned examiner
+    # Where the exam is actually conducted — the Google Meet link, set by admin
+    # or by the assigned examiner, published to the students holding a seat.
+    meeting_url: Optional[str] = None
+    # Set when this slot was generated from a weekly ExamSlotRule; None for a
+    # one-off slot created by hand.
+    rule_id: Optional[str] = None
 
     class Settings:
         name = "exams"
+        indexes = [
+            [("examiner_id", pymongo.ASCENDING)],
+            [("kind", pymongo.ASCENDING), ("scheduled_at", pymongo.ASCENDING)],
+            [("rule_id", pymongo.ASCENDING), ("scheduled_at", pymongo.ASCENDING)],
+        ]
 
 
 class ExamBooking(AuditedDocument):
@@ -851,31 +1062,54 @@ class ExamBooking(AuditedDocument):
 
     class Settings:
         name = "exam_bookings"
-        indexes = [[("student_id", pymongo.ASCENDING)]]
+        indexes = [
+            [("student_id", pymongo.ASCENDING)],
+            [("exam_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)],
+        ]
 
 
-class CEFRReport(AuditedDocument):
+class ExamResultBase(AuditedDocument):
+    """Fields both exam outcomes share, so the admin result views can list
+    Exam Date / Student ID / Examiner Name off a single shape."""
     student_id: str
-    exam_booking_id: str
+    exam_booking_id: Optional[str] = None
+    exam_id: Optional[str] = None
+    exam_title: Optional[str] = None
+    # Copied off the slot at submission: the report outlives the slot row, and
+    # admin's first listed column is the exam date.
+    exam_date: Optional[datetime] = None
+    examiner_id: Optional[str] = None
+    examiner_name: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+class CEFRReport(ExamResultBase):
     level: str  # A1..C2
     scores: dict = Field(default_factory=dict)
     verification_code: Indexed(str, unique=True)  # type: ignore
     report_url: Optional[str] = None
-    examiner_id: Optional[str] = None
 
     class Settings:
         name = "cefr_reports"
+        indexes = [[("student_id", pymongo.ASCENDING)]]
 
 
-class Certificate(AuditedDocument):
-    student_id: str
+class Certificate(ExamResultBase):
     title: str
+    grade: Optional[str] = None  # Speaking test grade / result
+    # What the CEFR-aligned certificate actually prints: the candidate's name
+    # and the level awarded. Both are frozen here at issue, like exam_date and
+    # examiner_name above — a later profile edit or a second test must not
+    # rewrite a certificate that has already been handed over.
+    student_name: Optional[str] = None
+    cefr_level: Optional[str] = None  # A1..C2
     verification_code: Indexed(str, unique=True)  # type: ignore
     certificate_url: Optional[str] = None
     issued_at: datetime = Field(default_factory=lambda: datetime.utcnow())
 
     class Settings:
         name = "certificates"
+        indexes = [[("student_id", pymongo.ASCENDING)]]
 
 
 class VideoCategory(AuditedDocument):
@@ -1120,6 +1354,7 @@ class Offer(AuditedDocument):
     """Exclusive targeted offer shown as a login pop-up in the student dashboard."""
     title: str
     body: str
+    image_url: Optional[str] = None
     offer_type: str = "subscription_upgrade"  # subscription_upgrade | discount | limited_time | festival
     plan: Optional[str] = None   # SubscriptionPlan value the offer maps to
     amount: Optional[int] = None  # paise (offer price)
@@ -1188,17 +1423,42 @@ class ActivityLog(AuditedDocument):
         ]
 
 
+class SiteLinkEntry(BaseModel):
+    """One public profile link. ``key`` picks the footer icon (an unknown key
+    falls back to a generic globe), ``label`` is its accessible name."""
+    key: str
+    label: str
+    url: str = ""
+
+
+class SiteLinks(AuditedDocument):
+    """Singleton: the public Google Business Profile + social media URLs.
+
+    These are not known until SpeakEdge is live, so they live in the database
+    rather than in the frontend bundle — admin fills them in (or changes them)
+    from Admin -> Site Links with no code change and no deploy. A row with a
+    blank url is kept as a placeholder but never rendered, so a half-filled
+    entry can never ship a broken link.
+    """
+    links: list[SiteLinkEntry] = Field(default_factory=list)
+
+    class Settings:
+        name = "site_links"
+
+
 # The full registry Beanie initialises.
 ALL_DOCUMENTS = [
     User, ActivationCode, Student,
     CommunityProfile, FriendRequest, Block, DirectMessage,
     SpeakingTeam, TeamMessage, TeamRead, TeamJoinRequest,
     SafetyCard, CommunityReport, ClassAttendance,
-    Payment, PlanConfig, Subscription, BookProduct, InventoryTransaction, BookOrder,
-    Teacher, BatchSeries, Batch, OrientationBatch, BatchMessage, Attendance, Remuneration, TeacherReview,
+    Payment, PlanConfig, AdmissionOffer, Subscription, BookProduct, InventoryTransaction, BookOrder,
+    Teacher, BatchSeries, Batch, OrientationSlotRule, OrientationBatch, BatchMessage, Attendance,
+    Remuneration, TeacherReview,
     Partner, PartnerLead, PartnerReport,
-    Exam, ExamBooking, CEFRReport, Certificate,
+    ExamSlotRule, Exam, ExamBooking, CEFRReport, Certificate,
     VideoCategory, Video, WatchHistory,
     PromptTemplate, PromptLesson, AISession, ClassConfirmation, Instruction,
     Notification, Banner, Offer, OfferResponse, Lead, ActivityLog, PushSubscription,
+    SiteLinks,
 ]

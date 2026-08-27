@@ -23,10 +23,24 @@ interface ApplyForm {
   area: string;
 }
 
+/**
+ * An organisation name only makes sense for the types that are one. This is
+ * the whole "dynamic form based on Partner Type" — the application is
+ * deliberately tiny; agreements, documents and commercials are collected later,
+ * from the partner dashboard, once the applicant is approved.
+ */
+const ORG_REQUIRED = new Set([
+  'Educational Institute Partner',
+  'Book Store / Shop Partner',
+  'Complete Sujyoti Franchisee Partner',
+]);
+
 export function PartnerApplyPage() {
-  const { register, handleSubmit, formState } = useForm<ApplyForm>({
+  const { register, handleSubmit, formState, watch } = useForm<ApplyForm>({
     defaultValues: { partner_type: 'Individual Partner' },
   });
+  const partnerType = watch('partner_type');
+  const orgRequired = ORG_REQUIRED.has(partnerType);
   const [interested, setInterested] = useState<string[]>([]);
   const [consent, setConsent] = useState(false);
   const [done, setDone] = useState('');
@@ -81,8 +95,17 @@ export function PartnerApplyPage() {
             <input className="input" {...register('name', { required: true })} />
           </div>
           <div>
-            <label className="label">Organisation (optional)</label>
-            <input className="input" {...register('org')} />
+            <label className="label">
+              {orgRequired
+                ? partnerType === 'Complete Sujyoti Franchisee Partner'
+                  ? 'Centre name'
+                  : 'Institute / shop name'
+                : 'Organisation (optional)'}
+            </label>
+            <input className="input" {...register('org', { required: orgRequired })} />
+            {formState.errors.org && (
+              <p className="mt-1 text-xs text-red-600">This is required for {partnerType}.</p>
+            )}
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">

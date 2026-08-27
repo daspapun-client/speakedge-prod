@@ -1,12 +1,9 @@
 """Analytics & Reports (Module 15): sales / lead / membership / payment /
 community / teacher / partner / demo-conversion aggregates with date-range
 filters and CSV exports."""
-import csv
-import io
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
 
 from app.core.envelope import ok
 from app.core.rbac import CurrentUser, require_admin
@@ -27,6 +24,7 @@ from app.db.models import (
     Teacher,
     TeacherReview,
 )
+from app.shared.exports import export_response
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -216,46 +214,9 @@ async def dashboard(admin: CurrentUser = Depends(require_admin), months: int = 6
     })
 
 
-def _csv_stream(header: list[str], rows):
-    def _iter():
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(header)
-        yield buf.getvalue(); buf.seek(0); buf.truncate(0)
-        for row in rows:
-            w.writerow(row)
-            yield buf.getvalue(); buf.seek(0); buf.truncate(0)
-    return _iter
-
-
-def _attachment(name: str):
-    return {"Content-Disposition": f"attachment; filename={name}"}
-
-
-try:  # openpyxl is optional; exports fall back to CSV if it is not installed.
-    from openpyxl import Workbook
-    _HAS_XLSX = True
-except ImportError:  # pragma: no cover
-    _HAS_XLSX = False
-
-
-def _export_response(basename: str, header: list[str], rows, fmt: str):
-    """Return a CSV (default) or XLSX StreamingResponse for the given rows."""
-    if fmt == "xlsx" and _HAS_XLSX:
-        wb = Workbook()
-        ws = wb.active
-        ws.append(header)
-        for row in rows:
-            ws.append(list(row))
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-        return StreamingResponse(
-            buf,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=_attachment(f"{basename}.xlsx"))
-    return StreamingResponse(_csv_stream(header, rows)(), media_type="text/csv",
-                             headers=_attachment(f"{basename}.csv"))
+# CSV / XLSX / PDF streaming lives in app.shared.exports so the partner report
+# exports and these share one implementation.
+_export_response = export_response
 
 
 @router.get("/payments/export")

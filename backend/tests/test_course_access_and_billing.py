@@ -7,7 +7,7 @@ Covers the client requirements added on top of the original spec:
   * No payment can be started without accepting the Terms & Conditions.
 """
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from PIL import Image
@@ -21,6 +21,7 @@ from app.db.models import (
     Subscription,
     User,
 )
+from app.modules.membership.router import today_ist
 from app.modules.payments import monthly
 
 pytestmark = pytest.mark.asyncio
@@ -33,13 +34,31 @@ def _png() -> bytes:
 
 
 PNG = _png()
-FILES = {"photo": ("p.png", PNG, "image/png"), "id_proof": ("id.png", PNG, "image/png")}
+FILES = {
+    "photo": ("p.png", PNG, "image/png"),
+    "id_proof": ("id.png", PNG, "image/png"),
+    "education_proof": ("edu.png", PNG, "image/png"),
+}
+
+
+def dob_for_age(age: int) -> str:
+    """A date of birth that reads as exactly `age` completed years today. Born on
+    1 January, so the birthday has always already passed this year."""
+    return date(today_ist().year - age, 1, 1).isoformat()
+
+
 FORM = {
-    "full_name": "Asha Rao", "password": "Student@123", "age": "27", "gender": "Female",
+    "full_name": "Asha Rao", "password": "Student@123", "dob": dob_for_age(27),
+    "gender": "Female",
     "phone": "9990001111", "address": "1 Park St", "state": "WB", "district": "Kolkata",
-    "pin_code": "700001", "id_proof_type": "Aadhaar Card",
+    "pin_code": "700001", "id_proof_type": "Masked Aadhaar",
+    "education_level": "Graduate",
     "consent_community_rules": "true", "consent_terms": "true",
     "consent_safety_policy": "true", "consent_non_refund": "true", "consent_process": "true",
+}
+GUARDIAN = {
+    "guardian_name": "Meera Rao", "guardian_relationship": "Mother",
+    "guardian_phone": "9998887777", "consent_guardian": "true",
 }
 
 
@@ -70,22 +89,62 @@ async def _student_headers(client, code: str):
 # ---------------------------------------------------------------------------
 # Kids / Adults course separation
 # ---------------------------------------------------------------------------
-async def test_code_audience_decides_the_students_course(client):
+async def test_age_decides_the_students_section(client):
+    """Section allocation is automatic: 8–15 → Kids, 16+ → Adults. The code's own
+    audience is only what was sold."""
     headers = await _admin_headers(client)
 
     r = await client.post("/api/v1/activation-codes/generate",
-                          json={"count": 1, "audience": "kids"}, headers=headers)
+                          json={"count": 2, "audience": "kids"}, headers=headers)
     assert r.status_code == 200, r.text
-    kid_code = r.json()["data"]["codes"][0]
+    kid_code, teen_code = r.json()["data"]["codes"]
 
-    # The public form reports which course the code enrols into.
+    # The public form serves every allowlist and age rule the page needs.
     r = await client.get(f"/api/v1/membership/form-options?code={kid_code}")
-    assert r.json()["data"]["audience"] == "kids"
-    assert "Aadhaar Card" in r.json()["data"]["id_proof_types"]
+    data = r.json()["data"]
+    assert data["audience"] == "kids"
+    assert "Masked Aadhaar" in data["id_proof_types"]
+    assert "Graduate" in data["academic_levels"]
+    assert (data["min_age"], data["kids_max_age"], data["minor_age"]) == (8, 15, 18)
 
-    await _activate(client, kid_code)
-    student = await Student.find_one(Student.student_id == kid_code)
-    assert student.audience.value == "kids"
+    await _activate(client, kid_code, dob=dob_for_age(15), **GUARDIAN)
+    assert (await Student.find_one(Student.student_id == kid_code)).audience.value == "kids"
+
+    # 16 is past the Kids boundary — Adult Section, still a minor.
+    await _activate(client, teen_code, dob=dob_for_age(16), **GUARDIAN)
+    teen = await Student.find_one(Student.student_id == teen_code)
+    assert teen.audience.value == "adults"
+    assert teen.age == 16 and teen.consent_guardian is True
+
+
+async def test_under_8_is_not_eligible_and_under_18_needs_a_guardian(client):
+    headers = await _admin_headers(client)
+    r = await client.post("/api/v1/activation-codes/generate", json={"count": 3}, headers=headers)
+    too_young, no_guardian, ok_code = r.json()["data"]["codes"]
+
+    r = await client.post("/api/v1/membership/activate",
+                          data={"code": too_young, **FORM, "dob": dob_for_age(7)}, files=FILES)
+    assert r.status_code == 422
+    assert "not eligible" in r.json()["error"]["message"]
+
+    # Under 18 without the parental-consent block is refused.
+    r = await client.post("/api/v1/membership/activate",
+                          data={"code": no_guardian, **FORM, "dob": dob_for_age(12)}, files=FILES)
+    assert r.status_code == 422
+    assert "guardian" in r.json()["error"]["message"].lower()
+
+    # Guardian details present but the consent box unticked is still refused.
+    r = await client.post("/api/v1/membership/activate", files=FILES, data={
+        "code": no_guardian, **FORM, "dob": dob_for_age(12),
+        **{**GUARDIAN, "consent_guardian": "false"},
+    })
+    assert r.status_code == 422
+
+    data = await _activate(client, ok_code, dob=dob_for_age(12), **GUARDIAN)
+    student = await Student.find_one(Student.student_id == data["student_id"])
+    assert student.guardian_name == "Meera Rao"
+    assert student.guardian_relationship == "Mother"
+    assert student.education_proof_url and student.education_level == "Graduate"
 
 
 async def test_student_cannot_switch_course_but_admin_can(client):
@@ -136,10 +195,11 @@ async def test_id_proof_type_is_recorded_and_validated(client):
     r = await client.post("/api/v1/activation-codes/generate", json={"count": 2}, headers=headers)
     good, bad = r.json()["data"]["codes"]
 
-    await _activate(client, good, id_proof_type="Passport", id_proof_number="Z1234567")
+    await _activate(client, good, id_proof_type="Passport")
     student = await Student.find_one(Student.student_id == good)
     assert student.id_proof_type == "Passport"
-    assert student.id_proof_number == "Z1234567"
+    # Age is derived from the date of birth, never posted.
+    assert student.age == 27
 
     r = await client.post("/api/v1/membership/activate",
                           data={"code": bad, **FORM, "id_proof_type": "Library Card"},

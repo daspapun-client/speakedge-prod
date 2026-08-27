@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { useState } from 'react';
 import { api, unwrap } from '@/lib/api';
-import { AdminStudentLink, EmailLink, PhoneLink } from './_shared';
+import { AdminStudentLink, ApprovePlanModal, EmailLink, PhoneLink, approveMembership } from './_shared';
 
 interface PendingStudent {
   student_id: string;
@@ -11,21 +12,32 @@ interface PendingStudent {
   photo_url?: string | null;
   id_proof_url?: string | null;
   id_proof_type?: string | null;
-  id_proof_number?: string | null;
+  education_level?: string | null;
+  education_proof_url?: string | null;
+  age?: number | null;
   audience?: string;
+  /** Plan already stamped on the activation code or an existing subscription. */
+  plan?: string | null;
+  guardian_name?: string | null;
+  guardian_relationship?: string | null;
+  guardian_phone?: string | null;
   created_at: string;
 }
 
 export function AdminVerification() {
   const qc = useQueryClient();
+  const [approving, setApproving] = useState<PendingStudent | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['verification-queue'],
     queryFn: () => unwrap<PendingStudent[]>(api.get('/admin/verification-queue')),
   });
 
   const approve = useMutation({
-    mutationFn: (id: string) => unwrap(api.post(`/membership/${id}/approve`)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['verification-queue'] }),
+    mutationFn: ({ id, plan }: { id: string; plan: string }) => approveMembership(id, plan),
+    onSuccess: () => {
+      setApproving(null);
+      qc.invalidateQueries({ queryKey: ['verification-queue'] });
+    },
   });
   const reject = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
@@ -43,9 +55,8 @@ export function AdminVerification() {
       ) : (
         <div className="mt-6 space-y-4">
           {data.map((s) => {
-            const approving = approve.isPending && approve.variables === s.student_id;
             const rejecting = reject.isPending && reject.variables?.id === s.student_id;
-            const busy = approving || rejecting;
+            const busy = approve.isPending || rejecting;
             return (
               <div key={s.student_id} className="card flex flex-wrap items-center gap-4">
                 <AdminStudentLink
@@ -61,26 +72,42 @@ export function AdminVerification() {
                     <span className={`badge ${s.audience === 'kids' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
                       {s.audience === 'kids' ? 'Kids' : 'Adults'}
                     </span>
+                    {s.age != null && (
+                      <span className={`badge ${s.age < 18 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
+                        Age {s.age}{s.age < 18 ? ' · minor' : ''}
+                      </span>
+                    )}
                     <span>
                       {s.id_proof_type ?? 'ID proof type not recorded'}
-                      {s.id_proof_number ? ` · ${s.id_proof_number}` : ''}
                     </span>
                     {s.id_proof_url && (
                       <a href={s.id_proof_url} target="_blank" rel="noreferrer" className="text-brand underline">
-                        View document
+                        View ID proof
+                      </a>
+                    )}
+                    <span>{s.education_level ?? 'Academic background not recorded'}</span>
+                    {s.education_proof_url && (
+                      <a href={s.education_proof_url} target="_blank" rel="noreferrer" className="text-brand underline">
+                        View academic proof
                       </a>
                     )}
                   </div>
+                  {s.guardian_name && (
+                    <div className="mt-1 text-xs text-amber-800">
+                      Guardian: {s.guardian_name}
+                      {s.guardian_relationship ? ` (${s.guardian_relationship})` : ''}
+                      {s.guardian_phone ? ` · ${s.guardian_phone}` : ''} · consent recorded
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     className="btn-primary inline-flex items-center gap-2"
                     disabled={busy}
-                    onClick={() => approve.mutate(s.student_id)}
+                    onClick={() => { approve.reset(); setApproving(s); }}
                   >
-                    {approving ? <Loader2 size={16} className="animate-spin" /> : null}
-                    {approving ? 'Approving…' : 'Approve'}
+                    Approve
                   </button>
                   <button
                     type="button"
@@ -99,6 +126,16 @@ export function AdminVerification() {
             );
           })}
         </div>
+      )}
+      {approving && (
+        <ApprovePlanModal
+          studentName={approving.full_name}
+          suggestedPlan={approving.plan}
+          busy={approve.isPending}
+          error={approve.error instanceof Error ? approve.error.message : undefined}
+          onClose={() => setApproving(null)}
+          onConfirm={(plan) => approve.mutate({ id: approving.student_id, plan })}
+        />
       )}
     </div>
   );

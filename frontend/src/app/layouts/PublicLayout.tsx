@@ -1,14 +1,19 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowRight, Facebook, Instagram, Linkedin, MapPin, Menu, Twitter, X, Youtube,
+  ArrowRight, Facebook, Globe, Instagram, Linkedin, MapPin, Menu, Twitter, X, Youtube,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
+import { planRupees, useLowestAdmissionPrice } from '@/lib/plans';
 import { Logo } from '@/components/Logo';
-import { CONTACT_PHONE, WHATSAPP_URL, activeSocialLinks, type SocialLink } from '@/lib/site';
+import {
+  CONTACT_PHONE, SUPPORT_EMAIL, SUPPORT_EMAIL_URL, WHATSAPP_URL, partnerHref, useSiteLinks,
+} from '@/lib/site';
 
-const SOCIAL_ICON: Record<SocialLink['key'], LucideIcon> = {
+// Icon per known link key. Admin may add a profile with any key, so anything
+// unrecognised falls back to a generic globe rather than crashing the footer.
+const SOCIAL_ICON: Record<string, LucideIcon> = {
   facebook: Facebook,
   instagram: Instagram,
   youtube: Youtube,
@@ -52,6 +57,16 @@ function HomeHashLink({
   const { pathname } = useLocation();
   const sectionId = homeSectionId(to);
 
+  // The partner links point at the Sujyoti EdTech corporate partner page once
+  // one is configured, which is off-site.
+  if (/^https?:\/\//.test(to)) {
+    return (
+      <a href={to} target="_blank" rel="noreferrer" className={className} onClick={onClick}>
+        {children}
+      </a>
+    );
+  }
+
   if (!sectionId) {
     return (
       <Link to={to} className={className} onClick={onClick}>
@@ -84,23 +99,23 @@ const NAV: { label: string; to: string }[] = [
   { label: 'Home', to: '/' },
   { label: 'About', to: '/#about' },
   { label: 'Membership', to: '/#membership' },
-  { label: 'Book', to: '/#book' },
+  { label: 'Our Books & Other Courses', to: '/shop' },
   { label: 'Membership Plans', to: '/plans' },
   { label: 'Speaking Community', to: '/#community' },
   { label: 'Free Demo', to: '/demo' },
-  { label: 'Partner', to: '/partners' },
+  { label: 'Partner', to: partnerHref().href },
   { label: 'Teacher', to: '/teachers' },
-  { label: 'Contact', to: '/#contact' },
+  { label: 'Contact', to: '/contact' },
 ];
 
-/** Social + Google Business icons. Renders nothing until URLs are configured. */
+/** Social + Google Business icons. Renders nothing until admin configures URLs. */
 function SocialIcons() {
-  const links = activeSocialLinks();
+  const links = useSiteLinks();
   if (!links.length) return null;
   return (
     <div className="mt-4 flex flex-wrap gap-2">
       {links.map((s) => {
-        const Icon = SOCIAL_ICON[s.key];
+        const Icon = SOCIAL_ICON[s.key] ?? Globe;
         return (
           <a
             key={s.key}
@@ -124,6 +139,7 @@ export function PublicLayout() {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const isHome = pathname === '/';
+  const lowestAdmission = useLowestAdmissionPrice();
   useScrollToHash();
 
   useEffect(() => {
@@ -143,9 +159,11 @@ export function PublicLayout() {
             <span className="hidden sm:inline">One Book · One Membership · One Learning Journey</span>
           </span>
           <span className="hidden text-white/40 sm:inline">•</span>
-          <span className="rounded-full bg-brand-gold px-2.5 py-0.5 text-[11px] font-bold text-slate-900">
-            Membership Starts at ₹699
-          </span>
+          {lowestAdmission != null && (
+            <span className="rounded-full bg-brand-gold px-2.5 py-0.5 text-[11px] font-bold text-slate-900">
+              Membership Starts at {planRupees(lowestAdmission)}
+            </span>
+          )}
           <Link
             to="/plans"
             className="inline-flex min-h-[36px] items-center gap-1 font-semibold underline-offset-2 hover:underline"
@@ -250,6 +268,12 @@ export function PublicLayout() {
             >
               WhatsApp / Mobile: {CONTACT_PHONE}
             </a>
+            <a
+              href={SUPPORT_EMAIL_URL}
+              className="mt-1 block break-all text-sm font-medium text-brand hover:underline"
+            >
+              Email: {SUPPORT_EMAIL}
+            </a>
             <SocialIcons />
           </div>
           <div>
@@ -257,9 +281,10 @@ export function PublicLayout() {
             <div className="mt-3 flex flex-col gap-2 text-sm text-slate-500">
               <HomeHashLink to="/#about" className="hover:text-brand">About</HomeHashLink>
               <HomeHashLink to="/#membership" className="hover:text-brand">Membership</HomeHashLink>
-              <Link to="/shop" className="hover:text-brand">Book</Link>
+              <Link to="/shop" className="hover:text-brand">Our Books &amp; Other Courses</Link>
               <Link to="/plans" className="hover:text-brand">Membership Plans</Link>
               <HomeHashLink to="/#community" className="hover:text-brand">Speaking Community</HomeHashLink>
+              <Link to="/verify" className="hover:text-brand">Verify a Certificate</Link>
             </div>
           </div>
           <div>
@@ -267,7 +292,7 @@ export function PublicLayout() {
             <div className="mt-3 flex flex-col gap-2 text-sm text-slate-500">
               <Link to="/demo" className="hover:text-brand">Free Demo</Link>
               <Link to="/activate" className="hover:text-brand">Activate Membership</Link>
-              <Link to="/partners" className="hover:text-brand">Partner</Link>
+              <HomeHashLink to={partnerHref().href} className="hover:text-brand">Partner</HomeHashLink>
               <Link to="/teachers" className="hover:text-brand">Teacher</Link>
               <Link to="/login" className="hover:text-brand">Login</Link>
             </div>
@@ -275,7 +300,7 @@ export function PublicLayout() {
           <div>
             <div className="text-sm font-semibold text-slate-900">Legal</div>
             <div className="mt-3 flex flex-col gap-2 text-sm text-slate-500">
-              <HomeHashLink to="/#contact" className="hover:text-brand">Contact</HomeHashLink>
+              <Link to="/contact" className="hover:text-brand">Contact</Link>
               <Link to="/privacy" className="hover:text-brand">Privacy Policy</Link>
               <Link to="/terms" className="hover:text-brand">Terms &amp; Conditions</Link>
               <Link to="/refund-policy" className="hover:text-brand">Cancellation &amp; Refund Policy</Link>

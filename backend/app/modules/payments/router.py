@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from pydantic import BaseModel, EmailStr
 
 from app.core.config import settings
 from app.core.envelope import ok
@@ -7,6 +7,8 @@ from app.core.exceptions import NotFoundError, ValidationAppError
 from app.core.rbac import CurrentUser, require_admin, require_student
 from app.core.ratelimit import rate_limit
 from app.db.models import (
+    AdmissionOffer,
+    BillingDetails,
     Payment,
     PaymentStatus,
     PlanConfig,
@@ -30,11 +32,28 @@ TERMS_REQUIRED = (
 
 
 class OrderRequest(BaseModel):
+    """Subscription orders only, and the price is always resolved server-side
+    from PlanConfig — the client never names an amount or a payment kind. The
+    monthly fee has its own endpoint, book orders go through /books/checkout."""
+
     plan: str | None = None  # PlanConfig key
-    kind: str = "subscription"
-    amount: int | None = None  # for exam kinds
     months: int | None = None  # chosen subscription duration (3 / 6 / 12)
     accept_terms: bool = False
+    # Pay the plan's first monthly fee alongside the admission fee (tiers with
+    # a monthly fee only — it is ignored on Tribe/Basic, which have none).
+    include_first_month: bool = False
+    # Ship the SpeakEdge Book with this membership: "home" (delivery charged)
+    # or "office" (free pickup). Omitted = membership only, nothing to ship.
+    delivery_type: str | None = None
+    # Billing contact + address from the membership checkout page. Optional so
+    # the one-click paths (offer acceptance) still work; it never affects price.
+    billing: BillingDetails | None = None
+    # Upgrades only: the date the upgraded membership takes over ("YYYY-MM-DD",
+    # within 30 days of paying). Omitted = as soon as the payment lands.
+    activate_on: str | None = None
+    # Dashboard exclusive offer (`Offer.id`). When live and targeted at this
+    # member, its amount is the payable — the client never sends a price.
+    offer: str | None = None
 
 
 class VerifyRequest(BaseModel):
@@ -141,11 +160,194 @@ async def delete_plan(plan: str, admin: CurrentUser = Depends(require_admin)):
 async def create_order(body: OrderRequest, user: CurrentUser = Depends(require_student)):
     if not body.accept_terms:
         raise ValidationAppError(TERMS_REQUIRED)
-    result = await service.create_order(user.subject, body.plan, body.kind, body.amount,
-                                        body.months, terms_accepted=True)
+    result = await service.create_order(user.subject, body.plan, "subscription",
+                                        months=body.months, terms_accepted=True,
+                                        billing=body.billing,
+                                        include_first_month=body.include_first_month,
+                                        delivery_type=body.delivery_type,
+                                        activate_on=body.activate_on,
+                                        offer_id=body.offer)
     await log_activity(user.subject, "payment.order", role=user.role.value,
                        meta={"order_id": result["order_id"], "amount": result["amount"]})
     return ok(result)
+
+
+@router.get("/upgrade-quote")
+async def upgrade_quote(plan: str, months: int | None = None,
+                        offer: str | None = None,
+                        user: CurrentUser = Depends(require_student)):
+    """What this member would pay to move to `plan`, and the credit for the
+    membership they already hold. Drives the checkout page — an upgrade shows
+    the adjustment, an activation-date choice and no SpeakEdge Book, since no
+    second copy is provided.
+
+    `offer` is a dashboard exclusive-offer id: when it is live for this member
+    the payable is the offer amount, not the catalogue difference."""
+    cfg = await service.get_plan_config(plan)
+    months = service._normalize_months(cfg, months)
+    quote = await service.upgrade_quote(user.subject, cfg,
+                                        service._price_for(cfg, months))
+    if offer:
+        quote = await service.apply_member_offer(quote, offer, user.subject, plan)
+    return ok(quote)
+
+
+@router.get("/plan-change")
+async def plan_change(user: CurrentUser = Depends(require_student)):
+    """The membership change already scheduled for this member (a paid upgrade
+    waiting for its activation date, or a requested downgrade) and the downgrade
+    they may ask for — Pro tiers only."""
+    return ok(await service.plan_change_state(user.subject))
+
+
+@router.post("/downgrade")
+async def request_downgrade(user: CurrentUser = Depends(require_student)):
+    """Move a Pro membership down to its standard tier from the next monthly
+    payment cycle. Free, and the Pro benefits run to the end of the cycle
+    already paid for."""
+    state = await service.request_downgrade(user.subject)
+    await log_activity(user.subject, "membership.downgrade", role=user.role.value,
+                       meta={"to": state["pending"]["plan"] if state["pending"] else state["plan"]})
+    return ok(state, "Downgrade scheduled")
+
+
+@router.delete("/plan-change")
+async def cancel_plan_change(user: CurrentUser = Depends(require_student)):
+    """Call off a scheduled downgrade before it takes effect."""
+    state = await service.cancel_plan_change(user.subject)
+    await log_activity(user.subject, "membership.downgrade_cancelled", role=user.role.value)
+    return ok(state, "Membership change cancelled")
+
+
+class GeneralPaymentBody(BaseModel):
+    student_id: str
+    amount: int          # paise
+    purpose: str         # selected from the suggestions, or typed
+    payment_mode: str = "manual"
+    transaction_ref: str | None = None
+    remarks: str | None = None
+
+
+@router.get("/admin/general/purposes")
+async def general_purposes(_admin: CurrentUser = Depends(require_admin)):
+    """Suggested payment purposes; admin may also type their own."""
+    return ok(service.GENERAL_PAYMENT_PURPOSES)
+
+
+@router.post("/admin/general")
+async def record_general(body: GeneralPaymentBody,
+                         admin: CurrentUser = Depends(require_admin)):
+    """Record a miscellaneous payment already collected, with the purpose that
+    will appear on its receipt."""
+    payment = await service.record_general_payment(
+        body.student_id, body.amount, body.purpose, payment_mode=body.payment_mode,
+        transaction_ref=body.transaction_ref, remarks=body.remarks,
+    )
+    await log_activity(admin.subject, "payment.general", role=admin.role.value,
+                       target_type="student", target_id=body.student_id,
+                       meta={"amount": body.amount, "purpose": payment.purpose})
+    return ok({"id": str(payment.id), "purpose": payment.purpose,
+               "amount": payment.amount, "invoice_no": payment.invoice_no},
+              "Payment recorded")
+
+
+# --------------------------------------------------------------------------
+# New-student offers (temporary discounted admission on a shareable link)
+# --------------------------------------------------------------------------
+class AdmissionOfferBody(BaseModel):
+    plan: str            # PlanConfig key
+    price: int           # paise — the discounted admission fee
+    valid_hours: int     # 24 | 48 | 72
+    student_name: str | None = None
+    phone: str | None = None
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+def _offer_view(o: AdmissionOffer, label: str | None = None) -> dict:
+    return {
+        "id": str(o.id), "token": o.token, "plan": o.plan, "label": label or o.plan,
+        "price": o.price, "list_price": o.list_price,
+        "valid_hours": o.valid_hours, "expires_at": o.expires_at.isoformat(),
+        "live": service.offer_live(o), "revoked": o.is_archived,
+        "student_name": o.student_name, "phone": o.phone, "email": o.email,
+        "note": o.note, "uses": o.uses, "order_numbers": o.order_numbers,
+        "used_at": o.used_at.isoformat() if o.used_at else None,
+        "created_by": o.created_by, "created_at": o.created_at.isoformat(),
+    }
+
+
+@router.get("/admin/admission-offers")
+async def list_admission_offers(_admin: CurrentUser = Depends(require_admin)):
+    """Every offer link ever minted, expired ones included — they are the record
+    of what was promised to whom."""
+    offers = await AdmissionOffer.find_all().sort(-AdmissionOffer.created_at).to_list()
+    labels = {c.plan: c.label for c in await service.list_plan_configs(include_disabled=True)}
+    return ok({
+        "offers": [_offer_view(o, labels.get(o.plan)) for o in offers],
+        "valid_hours": list(service.OFFER_VALID_HOURS),
+    })
+
+
+@router.post("/admin/admission-offers")
+async def create_admission_offer(body: AdmissionOfferBody,
+                                 admin: CurrentUser = Depends(require_admin)):
+    """Mint a discounted-admission payment link for a prospect who has not
+    joined yet. Admin sends the link on; it prices the guest checkout until it
+    expires."""
+    offer = await service.create_admission_offer(
+        plan=body.plan, price=body.price, valid_hours=body.valid_hours,
+        created_by=admin.subject, student_name=body.student_name,
+        phone=body.phone, email=body.email, note=body.note,
+    )
+    await log_activity(admin.subject, "payment.offer_link_create", role=admin.role.value,
+                       target_type="admission_offer", target_id=str(offer.id),
+                       meta={"plan": offer.plan, "price": offer.price,
+                             "valid_hours": offer.valid_hours})
+    cfg_label = (await service.get_plan_config(offer.plan)).label
+    return ok(_offer_view(offer, cfg_label), "Offer link created")
+
+
+@router.delete("/admin/admission-offers/{offer_id}")
+async def revoke_admission_offer(offer_id: str, admin: CurrentUser = Depends(require_admin)):
+    """Withdraw a link before it expires — it stops resolving immediately."""
+    offer = await AdmissionOffer.get(offer_id)
+    if not offer:
+        raise NotFoundError("Offer not found")
+    offer.archive(admin.subject, "Offer link revoked")
+    await offer.save()
+    await log_activity(admin.subject, "payment.offer_link_revoke", role=admin.role.value,
+                       target_type="admission_offer", target_id=offer_id)
+    return ok(message="Offer link revoked")
+
+
+@router.get("/admission-offers/{token}")
+async def admission_offer(token: str):
+    """Public: what a payment link is worth right now. 404 once it has expired
+    or been revoked, which is the frontend's cue to send the visitor to the
+    regular Membership Plans page."""
+    offer = await service.resolve_admission_offer(token)
+    cfg = await service.get_plan_config(offer.plan)
+    return ok({
+        "token": offer.token, "plan": offer.plan, "label": cfg.label,
+        "price": offer.price, "list_price": offer.list_price,
+        "expires_at": offer.expires_at.isoformat(),
+    })
+
+
+@router.get("/receipt/{payment_id}")
+async def payment_receipt(payment_id: str, user: CurrentUser = Depends(require_student)):
+    """Payment / Order Receipt for one of the caller's own payments. Scoped to
+    the student so a payment id cannot be used to read someone else's."""
+    payment = await Payment.get(payment_id)
+    if not payment or payment.student_id != user.subject:
+        raise NotFoundError("Payment not found")
+    pdf = await service.build_payment_receipt(payment)
+    name = payment.invoice_no or payment.razorpay_order_id or payment_id
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+    )
 
 
 @router.get("/monthly-due")
@@ -241,6 +443,12 @@ async def set_class_start(student_id: str, body: ClassStartBody,
 
 @router.post("/verify", dependencies=[Depends(_limit)])
 async def verify(body: VerifyRequest, user: CurrentUser = Depends(require_student)):
+    # Scope to the caller's own order. Without this any student could push
+    # another student's order through verification, or park it in `failed` by
+    # submitting a bad signature for it.
+    own = await Payment.find_one(Payment.razorpay_order_id == body.razorpay_order_id)
+    if not own or own.student_id != user.subject:
+        raise NotFoundError("Order not found")
     payment = await service.verify_and_activate(
         body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature
     )
@@ -253,24 +461,57 @@ async def verify(body: VerifyRequest, user: CurrentUser = Depends(require_studen
     }, "Payment verified")
 
 
+# Events that mean "the money is in". Guest book orders have no session, so this
+# hook is their backstop reconciler — subscribe to both in the Razorpay dashboard.
+_PAID_EVENTS = {"payment.captured", "order.paid"}
+# A payment the buyer started and the gateway rejected. Without this the attempt
+# would sit at `created` forever and the admin payments list would under-report
+# failures. Subscribe to these too.
+_FAILED_EVENTS = {"payment.failed"}
+# Refunds issued from the Razorpay dashboard rather than from our admin screens,
+# so the record still matches the money.
+_REFUND_EVENTS = {"refund.created", "refund.processed"}
+
+
 @router.post("/webhook")
 async def webhook(request: Request, x_razorpay_signature: str = Header(default="")):
     raw = await request.body()
     if not service.verify_webhook_signature(raw, x_razorpay_signature):
         raise ValidationAppError("Invalid webhook signature")
-    # Reconciliation: mark paid on payment.captured event (idempotent in service).
     import json
     event = json.loads(raw or b"{}")
-    try:
-        entity = event["payload"]["payment"]["entity"]
-        order_id = entity.get("order_id")
-        if order_id and event.get("event") == "payment.captured":
+    kind = event.get("event")
+    payload = event.get("payload") or {}
+    entity = (payload.get("payment") or {}).get("entity") or {}
+
+    if kind in _PAID_EVENTS:
+        # payment.captured carries the order id on the payment; order.paid also
+        # carries the order entity itself.
+        order_id = entity.get("order_id") or \
+            ((payload.get("order") or {}).get("entity") or {}).get("id")
+        if order_id:
             # The webhook body HMAC is already verified above, so the per-order
             # signature (which Razorpay does not send here) is not required.
+            # Idempotent in the service: a repeat event cannot double-activate.
             await service.verify_and_activate(order_id, entity.get("id", ""), "", trusted=True)
-    except (KeyError, TypeError):
-        pass
-    return ok(message="ok")
+        return ok(message="ok")
+
+    if kind in _FAILED_EVENTS:
+        await service.record_failure(
+            entity.get("order_id"), entity.get("id"),
+            (entity.get("error_description") or entity.get("error_code")
+             or "declined by the gateway"),
+        )
+        return ok(message="ok")
+
+    if kind in _REFUND_EVENTS:
+        refund = (payload.get("refund") or {}).get("entity") or {}
+        await service.record_refund(
+            refund.get("payment_id"), refund.get("id"), refund.get("amount"),
+        )
+        return ok(message="ok")
+
+    return ok(message="ignored")
 
 
 class ManualApproveBody(BaseModel):
@@ -294,12 +535,16 @@ async def manual_approve(body: ManualApproveBody, admin: CurrentUser = Depends(r
 class RefundStatusBody(BaseModel):
     refund_status: RefundStatus
     refund_id: str | None = None
+    # Required only for a partial refund (paise). The terminal statuses actually
+    # send the money back through Razorpay.
+    amount: int | None = None
 
 
 @router.post("/{order_id}/refund-status")
 async def refund_status(order_id: str, body: RefundStatusBody,
                         admin: CurrentUser = Depends(require_admin)):
-    payment = await service.set_refund_status(order_id, body.refund_status, body.refund_id)
+    payment = await service.set_refund_status(order_id, body.refund_status,
+                                              body.refund_id, body.amount)
     await log_activity(admin.subject, "payment.refund_status", role=admin.role.value,
                        target_id=order_id, meta={"refund_status": body.refund_status.value})
     return ok({"status": payment.status.value,

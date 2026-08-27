@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # --- Legal ---
     # Stamped on every payment as evidence of which Terms the buyer accepted at
     # checkout. Bump this whenever the policy pages are revised.
-    TERMS_VERSION: str = "2026-08"
+    TERMS_VERSION: str = "2026-08-25"
 
     # --- MongoDB ---
     MONGO_URI: str = "mongodb://localhost:27017"
@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # --- Passwords / seed ---
     SUPER_ADMIN_EMAIL: str = "admin@speakedge.in"
     SUPER_ADMIN_PASSWORD: str = "Admin@12345"
+    # Forgot-password link validity. The token is signed with the user's
+    # current password hash, so it also dies the moment the password changes.
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60
+
+    # --- Public site ---
+    # Base URL the SPA is served from; used to build links inside emails.
+    # In production FastAPI serves the SPA itself, so this is the site origin.
+    PUBLIC_BASE_URL: str = "http://localhost:5173"
 
     # --- Files / storage ---
     STORAGE_BACKEND: str = "local"  # local | s3
@@ -86,6 +94,15 @@ class Settings(BaseSettings):
     BOOK_PRICE_PAISE: int = 99900
     BOOK_DELIVERY_CHARGE_PAISE: int = 10000
     PICKUP_EXPIRY_DAYS: int = 14  # office-collection pickup token validity
+    # Stock is held from checkout, so an unpaid order must not hold it forever:
+    # after this window the scheduler cancels it and releases the copy.
+    ORDER_PAYMENT_WINDOW_HOURS: int = 48
+
+    # --- Invoicing ---
+    # Seller GSTIN. Empty renders the invoice without a tax breakup (the
+    # pre-registration state); set it to print CGST/SGST lines.
+    SELLER_GSTIN: str = ""
+    SELLER_STATE: str = "West Bengal"  # place of supply for CGST/SGST vs IGST
 
     # --- SMS / WhatsApp providers (empty = stub/log only) ---
     SMS_PROVIDER: str = ""       # e.g. msg91 | twilio

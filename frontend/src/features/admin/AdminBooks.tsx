@@ -39,6 +39,10 @@ interface OrderDetail {
   city?: string | null;
   pin_code?: string | null;
   delivery_instructions?: string | null;
+  /** Set when a copy ships. A book bundled with a membership is free, so
+   *  `book_amount` alone cannot say whether anything is dispatched. */
+  product_id?: string | null;
+  plan?: string | null;
   book_amount: number;
   delivery_charge: number;
   gst_amount: number;
@@ -308,7 +312,14 @@ function OrderDetailModal({
               <DetailRow label="Phone" value={<PhoneLink phone={order.phone} />} />
               <DetailRow label="Alt phone" value={<PhoneLink phone={order.alt_phone} />} />
               <DetailRow label="Email" value={<EmailLink email={order.email} />} />
-              <DetailRow label="Book amount" value={rupees(order.book_amount)} />
+              <DetailRow
+                label="Book amount"
+                value={
+                  order.product_id && !order.book_amount
+                    ? 'Included with membership'
+                    : rupees(order.book_amount)
+                }
+              />
               <DetailRow label="Delivery charge" value={rupees(order.delivery_charge)} />
               <DetailRow label="GST" value={rupees(order.gst_amount)} />
               <DetailRow label="Total" value={<span className="font-semibold">{rupees(order.amount)}</span>} />
@@ -647,6 +658,7 @@ interface ProductFormState {
   sku: string;
   version: (typeof BOOK_VERSIONS)[number];
   language: string;
+  description: string;
   priceRupees: string;
   offerPriceRupees: string;
   stock: string;
@@ -661,6 +673,7 @@ function emptyProductForm(): ProductFormState {
     sku: '',
     version: 'International English',
     language: 'English',
+    description: '',
     priceRupees: '',
     offerPriceRupees: '',
     stock: '0',
@@ -678,6 +691,7 @@ function productToForm(p: Product): ProductFormState {
       ? p.version
       : 'International English') as (typeof BOOK_VERSIONS)[number],
     language: 'English',
+    description: p.description ?? '',
     priceRupees: String(p.price / 100),
     offerPriceRupees: p.offer_price != null ? String(p.offer_price / 100) : '',
     stock: String(p.stock),
@@ -727,6 +741,7 @@ function ProductFormModal({
             sku: form.sku.trim(),
             version: form.version,
             language: form.language.trim() || 'English',
+            description: form.description.trim() || null,
             price,
             offer_price: offerPrice,
             stock,
@@ -742,6 +757,7 @@ function ProductFormModal({
         api.patch(`/books/admin/products/${product.id}`, {
           name: form.name.trim(),
           version: form.version,
+          description: form.description.trim() || null,
           price,
           offer_price: offerPrice,
           low_stock_threshold: Number(form.lowStockThreshold) || 10,
@@ -768,6 +784,17 @@ function ProductFormModal({
           <div className="sm:col-span-2">
             <label className="label">Name</label>
             <input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Description</label>
+            <textarea
+              className="input"
+              rows={4}
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              placeholder="What the book covers, who it is for, what is included…"
+            />
+            <p className="mt-1 text-xs text-slate-400">Shown to buyers on the shop product page.</p>
           </div>
           {mode === 'create' && (
             <div>
@@ -842,6 +869,12 @@ function ProductFormModal({
             </label>
           </div>
         </div>
+        {mode === 'create' && (
+          <p className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+            Cover and gallery photos are uploaded from the book's page once it exists — add the book,
+            then open it and use <span className="font-semibold">Upload photos</span>.
+          </p>
+        )}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <button className="btn-ghost" onClick={onClose} disabled={save.isPending}>Cancel</button>

@@ -1,6 +1,7 @@
 """Free Demo & Lead Management: capture, status tracking, feedback, conversion."""
 from datetime import date, datetime, timedelta, timezone
 
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, EmailStr
 
@@ -193,6 +194,32 @@ async def update_lead(lead_id: str, body: LeadUpdate, admin: CurrentUser = Depen
     lead.touch()
     await lead.save()
     return ok(lead.model_dump(mode="json"))
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[str]
+    reason: str | None = None
+
+
+@router.post("/bulk-delete")
+async def bulk_delete(body: BulkDeleteRequest, admin: CurrentUser = Depends(require_admin)):
+    """Archive-first bulk delete, mirroring the per-lead one: everything stays
+    restorable from the Archive page for 60 days. Ids that are unknown or
+    already deleted are skipped rather than failing the whole batch."""
+    wanted = list(dict.fromkeys(body.ids))
+    oids = [PydanticObjectId(i) for i in wanted if PydanticObjectId.is_valid(i)]
+    leads = await Lead.find({"_id": {"$in": oids}, "is_archived": False}).to_list()
+    for lead in leads:
+        lead.archive(admin.subject, body.reason or "bulk deleted by admin")
+        await lead.save()
+    deleted = [str(lead.id) for lead in leads]
+    skipped = [i for i in wanted if i not in set(deleted)]
+    if deleted:
+        await log_activity(admin.subject, "lead.bulk_delete", role=admin.role.value,
+                           target_type="lead",
+                           meta={"deleted": len(deleted), "skipped": len(skipped)})
+    return ok({"deleted": len(deleted), "ids": deleted, "skipped": skipped},
+              f"Deleted {len(deleted)} lead(s)")
 
 
 @router.delete("/{lead_id}")

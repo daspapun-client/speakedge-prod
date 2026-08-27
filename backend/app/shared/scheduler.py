@@ -1,5 +1,6 @@
 """APScheduler jobs: 60-day archive purge, scheduled-notification dispatch,
-upcoming-class reminders, attendance confirmation + auto-cancellation.
+upcoming-class reminders, attendance confirmation + auto-cancellation, and the
+rolling horizon of dated rows behind the weekly exam and orientation slots.
 Runs in-process on the backend."""
 import logging
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,9 @@ from app.db.models import (
     ALL_DOCUMENTS, Attendance, Batch, Notification, OrientationBatch, Remuneration,
     Subscription, Teacher,
 )
+from app.modules.book.service import expire_abandoned_orders
+from app.modules.exams import service as exam_slots
+from app.modules.orientation import service as orientation_slots
 from app.modules.notification import service as notif
 from app.modules.payments import monthly
 from app.shared.attendance import (
@@ -278,6 +282,37 @@ async def send_monthly_payment_reminders() -> None:
         log.info("Sent %s monthly payment reminders", sent)
 
 
+async def apply_plan_changes() -> None:
+    """Switch over memberships whose scheduled change has come due: an upgrade
+    on the activation date the learner chose, a downgrade at the next monthly
+    payment cycle (see payments.service.apply_due_plan_changes)."""
+    from app.modules.payments import service as pay_service
+
+    try:
+        applied = await pay_service.apply_due_plan_changes()
+    except Exception:  # pragma: no cover - a scheduler pass must never die
+        log.exception("plan change pass failed")
+        return
+    if applied:
+        log.info("Applied %s scheduled membership change(s)", applied)
+
+
+async def roll_weekly_slots() -> None:
+    """Keep the weekly slots stocked: top every rule's dates up to the horizon
+    and archive generated dates that passed with nobody on them. Exam slots and
+    orientation sessions both schedule this way (``app/shared/weekly.py``)."""
+    for name, sync in (("exam slots", exam_slots.sync_all),
+                       ("orientation sessions", orientation_slots.sync_all)):
+        try:
+            result = await sync()
+        except Exception:  # pragma: no cover - a scheduler pass must never die
+            log.exception("%s roll failed", name)
+            continue
+        if result["created"] or result["purged"]:
+            log.info("%s: +%s new, %s purged (%s weekly rule(s))",
+                     name, result["created"], result["purged"], result["rules"])
+
+
 def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -290,12 +325,26 @@ def start_scheduler() -> None:
     scheduler.add_job(send_subscription_expiry_reminders, "interval", hours=12, id="sub_expiry_reminders", replace_existing=True)
     scheduler.add_job(send_monthly_payment_reminders, "interval", hours=12,
                       id="monthly_payment_reminders", replace_existing=True)
+    # Book stock is held from checkout, so unpaid orders must be swept or a
+    # title stays "out of stock" because of abandoned carts.
+    scheduler.add_job(expire_abandoned_orders, "interval", minutes=30,
+                      id="order_expiry", replace_existing=True)
     # Attendance workflow: ask 24h ahead, auto-cancel 18h after asking. Both
     # passes are idempotent, so a 15-min cadence cannot double-fire.
     scheduler.add_job(send_attendance_confirmation_requests, "interval", minutes=15,
                       id="attendance_confirm_requests", replace_existing=True)
     scheduler.add_job(expire_unconfirmed_attendance, "interval", minutes=15,
                       id="attendance_expiry", replace_existing=True)
+    # Weekly slots repeat forever; the dated rows are materialised over a
+    # rolling horizon, so the window has to be walked forward.
+    # An interval job first fires one interval *after* startup, so a restart
+    # (or a deploy) could push a membership change that came due while the
+    # process was down another hour out. Sweep once on boot as well.
+    scheduler.add_job(apply_plan_changes, "interval", hours=1,
+                      next_run_time=datetime.now(timezone.utc),
+                      id="plan_changes", replace_existing=True)
+    scheduler.add_job(roll_weekly_slots, "interval", hours=6,
+                      id="weekly_slot_roll", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started")
 

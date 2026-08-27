@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  BookOpen, Check, ClipboardCopy, Copy, FileText, Layers, Loader2, Pencil,
+  BookOpen, Check, ClipboardCopy, Copy, FileText, Layers, Loader2,
   RotateCcw, Save, Sparkles, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { PromptBodyEditor } from '@/components/PromptBodyEditor';
+import { isBlankText, RichTextEditor } from '@/components/RichTextEditor';
 import { api, unwrap } from '@/lib/api';
 import { Modal, PageHeader, StatCard } from './_shared';
 
@@ -40,6 +42,7 @@ interface Lesson {
 interface RenderedPrompt {
   slot: string; label: string; stage: number; accent: string;
   source: 'template' | 'override'; body: string; raw: string;
+  params: Record<string, string>;
 }
 
 const STAGE_TONE: Record<number, string> = {
@@ -48,7 +51,7 @@ const STAGE_TONE: Record<number, string> = {
   3: 'bg-emerald-100 text-emerald-700',
 };
 
-/** Textarea list editor — one item per line. Used for sequences & expressions. */
+/** One item per line — plain-text editor with clean multilingual paste. */
 function LineListEditor({ label, hint, value, rows = 5, onChange }: {
   label: string;
   hint?: string;
@@ -56,15 +59,18 @@ function LineListEditor({ label, hint, value, rows = 5, onChange }: {
   rows?: number;
   onChange: (next: string[]) => void;
 }) {
+  const text = value.join('\n');
+  const minHeight = `${Math.max(rows * 1.35, 3)}rem`;
   return (
     <div>
       <label className="label">{label}</label>
-      <textarea
-        className="input font-mono text-xs leading-relaxed"
-        rows={rows}
-        value={value.join('\n')}
-        // Blank lines survive typing (so Enter works); they are stripped on save.
-        onChange={(e) => onChange(e.target.value.split('\n'))}
+      <RichTextEditor
+        plainText
+        mono
+        minHeight={minHeight}
+        value={text}
+        placeholder="One per line"
+        onChange={(next) => onChange(next.split('\n'))}
       />
       <p className="mt-1 text-xs text-slate-400">{hint ?? 'One per line.'}</p>
     </div>
@@ -105,7 +111,7 @@ export function AdminPromptLibrary() {
   const [slot, setSlot] = useState('lexical_international');
   const [previewCefr, setPreviewCefr] = useState('B1');
   const [previewEnglish, setPreviewEnglish] = useState('Neutral International English');
-  const [editingBody, setEditingBody] = useState<string | null>(null);
+  const [promptDraft, setPromptDraft] = useState('');
   const [copyOpen, setCopyOpen] = useState(false);
   const [error, setError] = useState('');
 
@@ -132,6 +138,12 @@ export function AdminPromptLibrary() {
     })),
   });
 
+  useEffect(() => {
+    if (prompt.data?.raw != null) setPromptDraft(prompt.data.raw);
+  }, [prompt.data?.raw]);
+
+  const promptDirty = !!prompt.data && promptDraft !== prompt.data.raw;
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['prompt-lesson', audience, week, day] });
     qc.invalidateQueries({ queryKey: ['prompt-body'] });
@@ -148,7 +160,7 @@ export function AdminPromptLibrary() {
   const savePrompt = useMutation({
     mutationFn: (body: string) =>
       unwrap(api.put('/prompt-library/prompt', { body }, { params: { audience, week, day, slot } })),
-    onSuccess: () => { setError(''); setEditingBody(null); refresh(); },
+    onSuccess: () => { setError(''); refresh(); },
     onError: (e: Error) => setError(e.message),
   });
   const resetPrompt = useMutation({
@@ -347,11 +359,12 @@ export function AdminPromptLibrary() {
                 </div>
                 <div className="sm:col-span-2">
                   <label className="label">Context</label>
-                  <textarea
-                    className="input min-h-[3.5rem]"
+                  <RichTextEditor
+                    plainText
+                    minHeight="3.5rem"
                     value={draft.context}
                     placeholder="The scenario the conversation is set in"
-                    onChange={(e) => patch({ context: e.target.value })}
+                    onChange={(next) => patch({ context: next })}
                   />
                 </div>
                 <div className="sm:col-span-2">
@@ -420,7 +433,7 @@ export function AdminPromptLibrary() {
                     className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
                       slot === s.key ? 'bg-brand text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
-                    onClick={() => { setSlot(s.key); setEditingBody(null); }}
+                    onClick={() => { setSlot(s.key); }}
                   >
                     {s.label.replace(' – ', ' · ').replace('British/American/International', 'Auto')}
                     {edited && <span className={`h-1.5 w-1.5 rounded-full ${slot === s.key ? 'bg-white' : 'bg-violet-500'}`} />}
@@ -460,61 +473,54 @@ export function AdminPromptLibrary() {
               <p className="py-8 text-center text-sm text-red-600">{(prompt.error as Error).message}</p>
             ) : prompt.data ? (
               <>
-                {editingBody === null ? (
-                  <pre className="mt-4 max-h-[26rem] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-4 font-mono text-xs leading-relaxed text-slate-700 ring-1 ring-slate-200/70">
-                    {prompt.data.body}
-                  </pre>
-                ) : (
-                  <>
-                    <textarea
-                      className="input mt-4 min-h-[24rem] font-mono text-xs leading-relaxed"
-                      value={editingBody}
-                      onChange={(e) => setEditingBody(e.target.value)}
-                    />
-                    <p className="mt-1 text-xs text-slate-400">
-                      Placeholders like <code className="rounded bg-slate-100 px-1">{'{{cefr_level}}'}</code> and{' '}
-                      <code className="rounded bg-slate-100 px-1">{'{{preferred_english}}'}</code> are replaced from the
-                      student's profile — keep them.
-                    </p>
-                  </>
-                )}
+                <PromptBodyEditor
+                  value={promptDraft}
+                  params={prompt.data.params ?? {}}
+                  onChange={setPromptDraft}
+                  className="mt-4 max-h-[26rem] overflow-auto rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200/70"
+                />
+                <p className="mt-1 text-xs text-slate-400">
+                  Edit the plain text directly. Highlighted values are dynamic — they come from lesson
+                  data and the preview settings above; only the surrounding instructions can be changed.
+                </p>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {editingBody === null ? (
-                    <>
-                      <button type="button" className="btn-primary inline-flex items-center gap-1.5 text-xs"
-                        onClick={() => setEditingBody(prompt.data!.raw)}>
-                        <Pencil size={14} /> Edit this prompt
-                      </button>
-                      <CopyButton text={prompt.data.body} />
-                      <button type="button" className="btn-ghost inline-flex items-center gap-1.5 text-xs"
-                        onClick={() => setCopyOpen(true)}>
-                        <Copy size={14} /> Copy to another day
-                      </button>
-                      {prompt.data.source === 'override' && (
-                        <button
-                          type="button"
-                          className="btn-ghost inline-flex items-center gap-1.5 text-xs text-amber-700"
-                          disabled={resetPrompt.isPending}
-                          onClick={() => { if (window.confirm('Discard this custom prompt and go back to the shared template?')) resetPrompt.mutate(); }}
-                        >
-                          <RotateCcw size={14} /> Reset to template
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="btn-primary inline-flex items-center gap-1.5 text-xs"
-                        disabled={savePrompt.isPending || !editingBody.trim()}
-                        onClick={() => savePrompt.mutate(editingBody)}>
-                        {savePrompt.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save prompt
-                      </button>
-                      <button type="button" className="btn-ghost inline-flex items-center gap-1.5 text-xs"
-                        onClick={() => setEditingBody(null)}>
-                        <X size={14} /> Cancel
-                      </button>
-                    </>
+                  <button
+                    type="button"
+                    className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                    disabled={!promptDirty || savePrompt.isPending || isBlankText(promptDraft)}
+                    onClick={() => savePrompt.mutate(promptDraft)}
+                  >
+                    {savePrompt.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    Save prompt
+                  </button>
+                  {promptDirty && (
+                    <button
+                      type="button"
+                      className="btn-ghost inline-flex items-center gap-1.5 text-xs"
+                      onClick={() => setPromptDraft(prompt.data!.raw)}
+                    >
+                      <X size={14} /> Discard
+                    </button>
                   )}
+                  <CopyButton text={prompt.data.body} />
+                  <button type="button" className="btn-ghost inline-flex items-center gap-1.5 text-xs"
+                    onClick={() => setCopyOpen(true)}>
+                    <Copy size={14} /> Copy to another day
+                  </button>
+                  {prompt.data.source === 'override' && (
+                    <button
+                      type="button"
+                      className="btn-ghost inline-flex items-center gap-1.5 text-xs text-amber-700"
+                      disabled={resetPrompt.isPending}
+                      onClick={() => { if (window.confirm('Discard this custom prompt and go back to the shared template?')) resetPrompt.mutate(); }}
+                    >
+                      <RotateCcw size={14} /> Reset to template
+                    </button>
+                  )}
+                  <span className="text-xs text-slate-400">
+                    {promptDirty ? 'Unsaved prompt changes' : 'Prompt saved'}
+                  </span>
                 </div>
               </>
             ) : null}

@@ -1,7 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Layers } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
+import { scheduleDateParts } from '@/features/batch/shared';
+import { AdminStudentLink } from './_shared';
 import {
   BatchClassesPanel,
   batchMeta,
@@ -9,7 +12,69 @@ import {
   findAdminListBatchByPrimaryId,
   isParentBatch,
   type AdminListBatch,
+  type BatchSession,
 } from './batchSchedulePanel';
+
+/** Join requests are filed against a child sub-batch, but admins navigate by
+ *  course — so decide them here, from the one page they actually open. */
+function JoinRequestsPanel({ sessions }: { sessions: BatchSession[] }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const act = useMutation({
+    mutationFn: ({ batchId, studentId, decision }: { batchId: string; studentId: string; decision: 'approve' | 'reject' }) =>
+      unwrap(api.post(`/teacher/batches/${batchId}/${decision}-join`, { student_id: studentId })),
+    onSuccess: () => {
+      setError(null);
+      qc.invalidateQueries({ queryKey: ['admin-batches'] });
+    },
+    onError: (e: any) => setError(e?.response?.data?.message ?? 'Could not update the request.'),
+  });
+
+  const rows = sessions.flatMap((s) => (s.pending ?? []).map((p) => ({ session: s, student: p })));
+  if (!rows.length) return null;
+
+  return (
+    <div className="card">
+      <h2 className="text-lg font-bold text-slate-900">Pending join requests ({rows.length})</h2>
+      <p className="mt-0.5 text-xs text-slate-500">Only an admin can approve a teacher-led class request.</p>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <div className="mt-3 space-y-2">
+        {rows.map(({ session, student }) => (
+          <div
+            key={`${session.batch_id}:${student.student_id}`}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-100 bg-amber-50/40 px-3 py-2"
+          >
+            <div className="min-w-0">
+              <AdminStudentLink studentId={student.student_id} name={student.name} photoUrl={student.photo_url} gender={student.gender} />
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Class on {scheduleDateParts(session.date)?.fullLabel ?? session.date}
+              </p>
+            </div>
+            <span className="flex flex-wrap items-center gap-2">
+              <Link to={`/admin/batches/${session.batch_id}`} className="text-xs text-brand hover:underline">Open class</Link>
+              <button
+                type="button"
+                className="btn-ghost py-1 text-xs text-green-600"
+                disabled={act.isPending}
+                onClick={() => act.mutate({ batchId: session.batch_id, studentId: student.student_id, decision: 'approve' })}
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                className="btn-ghost py-1 text-xs text-red-600"
+                disabled={act.isPending}
+                onClick={() => act.mutate({ batchId: session.batch_id, studentId: student.student_id, decision: 'reject' })}
+              >
+                Reject
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function AdminBatchSeriesPage() {
   const { batchId = '' } = useParams();
@@ -74,6 +139,8 @@ export function AdminBatchSeriesPage() {
           </span>
         </div>
       </div>
+
+      <JoinRequestsPanel sessions={meta.sessions} />
 
       <BatchClassesPanel batch={batch} layout="page" />
     </div>

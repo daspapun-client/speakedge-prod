@@ -14,7 +14,7 @@ enforced by the guards in [rbac.py](../backend/app/core/rbac.py).
 | Role | Who they are | Primary surface |
 | --- | --- | --- |
 | **Anonymous visitor** | Prospects, buyers, people verifying a certificate | Public site (`/`, `/plans`, `/demo`, `/verify`, book shop) |
-| **Student / Member** | A person who activated a lifetime membership | Student dashboard (`/dashboard/*`) |
+| **Student / Member** | A person who activated a membership | Student dashboard (`/dashboard/*`) |
 | **Teacher** | A certified teacher running batches | Teacher dashboard |
 | **Partner** | One of four Sujyoti EdTech partner types | Partner dashboard |
 | **Examiner** | Conducts CEFR & Speaking tests, files reports | Examiner dashboard |

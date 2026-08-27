@@ -7,7 +7,7 @@ pytestmark = pytest.mark.asyncio
 EXPECTED = {
     # plan: (admission ₹, monthly ₹, community yrs, conv teams, classes/wk,
     #        cefr, speaking, support yrs)
-    "Tribe": (699, 0, 1, 0, 0, 0, 0, 0),
+    "Tribe": (799, 0, 1, 0, 0, 0, 1, 0),   # no community class, no CEFR test
     "Basic": (1499, 0, 1, 2, 0, 1, 1, 0),
     "Silver": (1999, 349, 2, 2, 1, 2, 2, 2),
     "Gold": (2499, 299, 3, 2, 1, 3, 3, 3),

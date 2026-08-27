@@ -44,9 +44,18 @@ async def get_optional_user(
         return None
 
 
-def require_role(*roles: Role):
-    """Return a dependency that allows only the given roles (super_admin always allowed)."""
-    allowed = set(roles) | {Role.super_admin}
+def require_role(*roles: Role, allow_super_admin: bool = True):
+    """Return a dependency that allows only the given roles.
+
+    ``allow_super_admin`` (default) lets the super admin through any
+    admin-side guard. The **portal** guards below turn it off: each account
+    belongs to exactly one portal, so an admin (super or not) is refused on
+    student/teacher/partner/examiner endpoints just like a student is refused
+    on admin endpoints. Admin surfaces that legitimately reach into another
+    portal's data have their own endpoints or their own inline admin check
+    (e.g. ``_accessible_team`` / ``_accessible_batch``).
+    """
+    allowed = set(roles) | ({Role.super_admin} if allow_super_admin else set())
 
     async def _guard(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if user.role not in allowed:
@@ -59,7 +68,9 @@ def require_role(*roles: Role):
 # Convenience guards
 require_admin = require_role(Role.admin)
 require_super_admin = require_role(Role.super_admin)  # super admin only (archive restore / purge)
-require_student = require_role(Role.student)
-require_examiner = require_role(Role.examiner)
-require_teacher = require_role(Role.teacher)
-require_partner = require_role(Role.partner)
+
+# Portal guards — one role each, no cross-portal access (not even for super admin).
+require_student = require_role(Role.student, allow_super_admin=False)
+require_examiner = require_role(Role.examiner, allow_super_admin=False)
+require_teacher = require_role(Role.teacher, allow_super_admin=False)
+require_partner = require_role(Role.partner, allow_super_admin=False)

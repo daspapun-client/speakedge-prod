@@ -7,10 +7,28 @@ import {
 import { api, unwrap } from '@/lib/api';
 import { PageHeader, rupees } from '@/features/admin/_shared';
 
+interface ExamDownload {
+  url?: string | null;
+  code: string;
+  remarks?: string | null;
+  examiner_name?: string | null;
+  exam_date?: string | null;
+}
+
 interface Downloads {
-  certificates: { title: string; url?: string | null; code: string }[];
-  report_cards: { level: string; url?: string | null; code: string }[];
+  certificates: (ExamDownload & { id: string; title: string; grade?: string | null })[];
+  report_cards: (ExamDownload & { id: string; level: string })[];
   invoices: { invoice_no?: string | null; url?: string | null; amount: number }[];
+}
+
+/** "12 Sep 2026 · Rina Sen" — whichever parts the result actually carries. */
+function examSubtitle(d: ExamDownload) {
+  const parts = [
+    d.exam_date ? new Date(d.exam_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null,
+    d.examiner_name,
+    `Code · ${d.code}`,
+  ];
+  return parts.filter(Boolean).join(' · ');
 }
 
 function StatTile({ label, value, icon: Icon, hint }: { label: string; value: number | string; icon: LucideIcon; hint?: string }) {
@@ -72,14 +90,20 @@ function EmptyBlock({
 function DownloadCard({
   title,
   subtitle,
+  note,
   icon: Icon,
   url,
+  to,
   accent = 'brand',
 }: {
   title: string;
   subtitle: string;
+  /** Examiner remarks, shown under the title when the result carries them. */
+  note?: string | null;
   icon: LucideIcon;
   url?: string | null;
+  /** In-app page for the document, where it has one — preferred over the PDF. */
+  to?: string;
   accent?: 'brand' | 'gold' | 'emerald';
 }) {
   const iconBg = accent === 'gold' ? 'bg-brand-gold/15 text-brand-gold' : accent === 'emerald' ? 'bg-emerald-100 text-emerald-600' : 'bg-brand/10 text-brand';
@@ -93,9 +117,14 @@ function DownloadCard({
         <div className="min-w-0">
           <div className="truncate font-semibold text-slate-800 group-hover:text-brand">{title}</div>
           <div className="mt-0.5 truncate text-xs text-slate-400">{subtitle}</div>
+          {note && <p className="mt-1 line-clamp-2 text-xs text-slate-500">{note}</p>}
         </div>
       </div>
-      {url ? (
+      {to ? (
+        <Link to={to} className="btn-ghost shrink-0 py-2" title="Open">
+          <ArrowRight size={16} /> <span className="hidden sm:inline">Open</span>
+        </Link>
+      ) : url ? (
         <a
           href={url}
           target="_blank"
@@ -198,9 +227,11 @@ export function ReportsPage() {
               <DownloadCard
                 key={c.code}
                 title={c.title}
-                subtitle={`Verification code · ${c.code}`}
+                subtitle={examSubtitle(c)}
+                note={c.remarks}
                 icon={Award}
                 url={c.url}
+                to={c.id ? `/dashboard/certificate/${c.id}` : undefined}
                 accent="gold"
               />
             ))}
@@ -222,9 +253,11 @@ export function ReportsPage() {
               <DownloadCard
                 key={r.code}
                 title={`CEFR Level ${r.level}`}
-                subtitle={`Verification code · ${r.code}`}
+                subtitle={examSubtitle(r)}
+                note={r.remarks}
                 icon={FileText}
                 url={r.url}
+                to={r.id ? `/dashboard/report/${r.id}` : undefined}
                 accent="emerald"
               />
             ))}

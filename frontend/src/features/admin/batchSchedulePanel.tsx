@@ -23,10 +23,18 @@ export interface AdminListBatch {
   slot_start?: string | null;
   slot_end?: string | null;
   meeting_active: boolean;
-  members: { student_id: string; name: string; photo_url?: string | null; gender?: string | null }[];
+  members: PendingJoin[];
+  pending?: PendingJoin[];
   attendance_submitted_dates?: string[];
   linked_batch_ids?: string[];
   class_sessions?: BatchSession[];
+}
+
+export interface PendingJoin {
+  student_id: string;
+  name: string;
+  photo_url?: string | null;
+  gender?: string | null;
 }
 
 export interface BatchSession {
@@ -40,6 +48,7 @@ export interface BatchSession {
   slot_end?: string | null;
   class_time?: string | null;
   member_count?: number;
+  pending?: PendingJoin[];
   meeting_active?: boolean;
   meeting_url?: string | null;
   attendance_done?: boolean;
@@ -207,6 +216,11 @@ function ClassSessionCard({
           <span className="text-sm text-slate-400">—</span>
         )}
         <div className="flex shrink-0 items-center gap-1">
+          {(session.pending?.length ?? 0) > 0 && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+              {session.pending!.length} request{session.pending!.length === 1 ? '' : 's'}
+            </span>
+          )}
           {done ? (
             <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Done</span>
           ) : isToday ? (

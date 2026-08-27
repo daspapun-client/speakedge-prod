@@ -95,6 +95,7 @@ export function AdminLeads() {
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Lead | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
   const pageSize = 25;
 
@@ -111,10 +112,57 @@ export function AdminLeads() {
     onSuccess: (_d, id) => {
       setError('');
       setSelected((cur) => (cur?.id === id ? null : cur));
+      setChecked((cur) => {
+        const next = new Set(cur);
+        next.delete(id);
+        return next;
+      });
       qc.invalidateQueries({ queryKey: ['admin-leads'] });
     },
     onError: (e: Error) => setError(e.message),
   });
+
+  const bulkRemove = useMutation({
+    mutationFn: (ids: string[]) =>
+      unwrap<{ deleted: number; skipped: string[] }>(api.post('/leads/bulk-delete', { ids })),
+    onSuccess: (d) => {
+      setError('');
+      setChecked(new Set());
+      qc.invalidateQueries({ queryKey: ['admin-leads'] });
+      if (d.skipped.length) {
+        window.alert(`Deleted ${d.deleted}. Skipped ${d.skipped.length} (not found or already deleted).`);
+      }
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  // Selection only ever covers the rows on screen, so changing page or filter
+  // clears it — otherwise "Delete selected" would hit leads you can't see.
+  const rows = data?.items ?? [];
+  const allChecked = rows.length > 0 && rows.every((l) => checked.has(l.id));
+  const resetTo = (fn: () => void) => { fn(); setChecked(new Set()); };
+
+  const toggleOne = (id: string) =>
+    setChecked((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleAll = () =>
+    setChecked((cur) => {
+      const next = new Set(cur);
+      rows.forEach((l) => (allChecked ? next.delete(l.id) : next.add(l.id)));
+      return next;
+    });
+
+  const confirmBulkRemove = () => {
+    const ids = [...checked];
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} lead(s)? They move to the Archive and can be restored for 60 days.`)) return;
+    bulkRemove.mutate(ids);
+  };
 
   /** Exports every lead matching the current status filter (not just this page). */
   const exportLeads = (format: 'csv' | 'xlsx') =>
@@ -129,6 +177,31 @@ export function AdminLeads() {
   };
 
   const columns: Column<Lead>[] = [
+    {
+      key: 'select',
+      header: (
+        <input
+          type="checkbox"
+          className="accent-brand"
+          checked={allChecked}
+          disabled={!rows.length}
+          onChange={toggleAll}
+          aria-label="Select all leads on this page"
+        />
+      ),
+      width: '1%',
+      className: 'w-10',
+      cell: (l) => (
+        <input
+          type="checkbox"
+          className="accent-brand"
+          checked={checked.has(l.id)}
+          onChange={() => toggleOne(l.id)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${l.name}`}
+        />
+      ),
+    },
     { key: 'name', header: 'Name', sort: (l) => l.name, cell: (l) => <span className="font-semibold">{l.name}</span> },
     { key: 'phone', header: 'Phone', sort: (l) => l.phone, cell: (l) => <PhoneLink phone={l.phone} /> },
     { key: 'email', header: 'Email', sort: (l) => l.email ?? '', cell: (l) => <EmailLink email={l.email} /> },
@@ -206,11 +279,28 @@ export function AdminLeads() {
         filters={
           <TableFilter
             value={status}
-            onChange={(v) => { setStatus(v); setPage(1); }}
+            onChange={(v) => resetTo(() => { setStatus(v); setPage(1); })}
             options={[{ value: '', label: 'All statuses' }, ...STATUSES.map((s) => ({ value: s, label: s }))]}
           />
         }
-        externalPaginator={<Paginator page={page} pageSize={pageSize} total={data?.total ?? 0} onPage={setPage} />}
+        toolbarRight={
+          checked.size > 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-600">{checked.size} selected</span>
+              <button
+                type="button"
+                className="btn-ghost inline-flex items-center gap-1.5 py-1 text-xs text-red-600"
+                disabled={bulkRemove.isPending}
+                onClick={confirmBulkRemove}
+              >
+                <Trash2 size={14} /> {bulkRemove.isPending ? 'Deleting…' : 'Delete selected'}
+              </button>
+            </div>
+          ) : undefined
+        }
+        externalPaginator={
+          <Paginator page={page} pageSize={pageSize} total={data?.total ?? 0} onPage={(p) => resetTo(() => setPage(p))} />
+        }
       />
 
       {selected && <LeadModal lead={selected} onClose={() => setSelected(null)} onDone={() => qc.invalidateQueries({ queryKey: ['admin-leads'] })} />}

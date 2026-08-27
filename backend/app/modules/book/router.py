@@ -8,7 +8,8 @@ from pydantic import BaseModel, EmailStr
 
 from app.core.envelope import ok
 from app.core.exceptions import NotFoundError, ValidationAppError
-from app.core.rbac import CurrentUser, require_admin
+from app.core.rbac import CurrentUser, get_optional_user, require_admin, require_student
+from app.core.security import Role
 from app.core.config import settings
 from app.core.ratelimit import rate_limit
 from app.db.models import (
@@ -37,6 +38,8 @@ async def list_books(version: BookVersion | None = None):
     if version:
         query["version"] = version.value
     products = await BookProduct.find(query).to_list()
+    # The SpeakEdge Book leads the catalogue; everything else keeps insertion order.
+    products.sort(key=lambda p: not p.is_speakedge_book)
     return ok([
         {
             "id": str(p.id), "name": p.name, "sku": p.sku, "version": p.version.value,
@@ -60,6 +63,9 @@ async def speakedge_book():
     data = p.model_dump(mode="json")
     data["available"] = p.available
     data["sell_price"] = p.sell_price
+    # Both checkout pages price the bundle from this payload, so the delivery
+    # charge is served with it rather than duplicated as a frontend constant.
+    data["delivery_charge"] = settings.BOOK_DELIVERY_CHARGE_PAISE
     return ok(data)
 
 
@@ -93,17 +99,28 @@ class CheckoutRequest(BaseModel):
     city: str | None = None
     pin_code: str | None = None
     delivery_instructions: str | None = None
+    # Pay the plan's first monthly fee together with the admission fee. Only
+    # tiers that have a monthly fee (Silver -> Diamond Pro) are affected.
+    include_first_month: bool = False
+    # New-student offer link (AdmissionOffer.token): while it is live the plan
+    # is charged at the offer price instead of the catalogue admission fee.
+    offer: str | None = None
     # Terms & Conditions acceptance — mandatory before an order is created.
     accept_terms: bool = False
 
 
 @router.post("/checkout", dependencies=[Depends(_limit)])
-async def checkout(body: CheckoutRequest, request: Request):
+async def checkout(body: CheckoutRequest, request: Request,
+                   user: CurrentUser | None = Depends(get_optional_user)):
     if not body.accept_terms:
         raise ValidationAppError(
             "Please read and accept the Terms & Conditions, Privacy Policy and "
             "Cancellation & Refund Policy before making a payment."
         )
+    # Checkout stays public (new joiners have no account yet), but a signed-in
+    # student's order is filed under their id so it shows in their dashboard
+    # instead of only being reachable by order number.
+    student_id = user.subject if user and user.role == Role.student else None
     result = await service.create_checkout(
         buyer_name=body.buyer_name, phone=body.phone, delivery_type=body.delivery_type,
         product_id=body.product_id, version=body.version.value if body.version else None,
@@ -112,11 +129,76 @@ async def checkout(body: CheckoutRequest, request: Request):
         address_line2=body.address_line2, landmark=body.landmark, state=body.state,
         district=body.district, city=body.city, pin_code=body.pin_code,
         delivery_instructions=body.delivery_instructions,
+        include_first_month=body.include_first_month, offer=body.offer,
+        student_id=student_id,
     )
-    await log_activity(body.phone, "book.checkout", role="public",
+    await log_activity(student_id or body.phone, "book.checkout",
+                       role=user.role.value if user else "public",
                        meta={"order_number": result["order_number"], "amount": result["amount"]},
                        ip=request.client.host if request.client else None)
     return ok(result, "Order created. Complete payment to confirm.")
+
+
+class BookVerifyRequest(BaseModel):
+    order_number: str
+    phone: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+@router.post("/verify-payment", dependencies=[Depends(_limit)])
+async def verify_payment(body: BookVerifyRequest, request: Request):
+    """Guest book-order payment confirmation — phone must match the order."""
+    order = await BookOrder.find_one(
+        BookOrder.order_number == body.order_number,
+        BookOrder.phone == body.phone,
+    )
+    if not order:
+        raise NotFoundError("Order not found")
+    payment = await Payment.get(order.payment_id)
+    if not payment or payment.kind != "book":
+        raise NotFoundError("Payment not found")
+    if payment.razorpay_order_id != body.razorpay_order_id:
+        raise ValidationAppError("Payment details do not match this order")
+
+    from app.modules.payments import service as pay
+
+    payment = await pay.verify_and_activate(
+        body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature,
+    )
+    await log_activity(body.phone, "book.payment_verify", role="public",
+                       target_id=body.order_number,
+                       meta={"status": payment.status.value},
+                       ip=request.client.host if request.client else None)
+    # Fulfilment ran synchronously above, so the activation code exists by now —
+    # return it so the confirmation screen can hand the buyer their next step
+    # instead of sending them off to look it up on the tracking page.
+    order = await BookOrder.get(order.id) or order
+    return ok({
+        "status": payment.status.value,
+        "order_number": order.order_number,
+        "paid": payment.status in (PaymentStatus.paid, PaymentStatus.manually_approved),
+        "activation_code": order.activation_code,
+        "order_status": order.status.value,
+    }, "Payment verified")
+
+
+class ResumeRequest(BaseModel):
+    order_number: str
+    phone: str
+
+
+@router.post("/resume-payment", dependencies=[Depends(_limit)])
+async def resume_payment(body: ResumeRequest, request: Request):
+    """Reopen an order the buyer walked away from without paying. The gateway
+    order id is single-attempt, so this issues a fresh one against the same
+    order — the buyer keeps their order number, address and reserved copy."""
+    result = await service.resume_payment(body.order_number, body.phone)
+    await log_activity(body.phone, "book.resume_payment", role="public",
+                       target_id=body.order_number,
+                       ip=request.client.host if request.client else None)
+    return ok(result, "Complete the payment to confirm your order.")
 
 
 @router.get("/track/{order_number}")
@@ -144,8 +226,34 @@ async def track(order_number: str, phone: str | None = None):
             "activation_code": order.activation_code,
             "pickup_otp": order.pickup_otp if order.delivery_type == "office" else None,
             "pickup_qr": service.pickup_qr_payload(order),
+            # Lets the page offer "Pay now" instead of stranding an unpaid order.
+            "can_resume": order.status == OrderStatus.payment_pending,
         })
     return ok(timeline)
+
+
+@router.get("/my-orders")
+async def my_orders(user: CurrentUser = Depends(require_student)):
+    """The signed-in student's own book orders. Orders placed as a guest are
+    handed over to the account at membership activation, so a member sees the
+    order they bought their membership with here too."""
+    orders = await BookOrder.find(
+        BookOrder.student_id == user.subject,
+        BookOrder.is_archived == False,  # noqa: E712
+    ).sort(-BookOrder.created_at).to_list()
+    return ok([
+        {
+            "id": str(o.id), "order_number": o.order_number, "status": o.status.value,
+            "amount": o.amount, "plan": o.plan, "book_amount": o.book_amount,
+            # A bundled book is free, so the price cannot say whether one ships.
+            "has_book": o.product_id is not None,
+            "delivery_type": o.delivery_type, "activation_code": o.activation_code,
+            "courier_name": o.courier_name, "tracking_number": o.tracking_number,
+            "tracking_url": o.tracking_url, "phone": o.phone,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in orders
+    ])
 
 
 @router.get("/receipt/{order_number}")

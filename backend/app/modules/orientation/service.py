@@ -6,11 +6,33 @@ before diving into the learning journey. Admins schedule orientation batches
 complete (or students self-complete a recorded walkthrough). Completion flips
 ``Student.orientation_status`` to ``completed`` and unlocks the dashboard prompt.
 
+Sessions are scheduled **weekly** — admin sets a weekday and a start time
+("Sunday \u2013 11:00 AM") and it repeats every week until changed or removed. The
+recurrence machinery is ``app/shared/weekly.py``; this module only says what an
+orientation occurrence is built from and what makes one untouchable: a student
+having joined it, or the session already being over.
+
 The walkthrough content below is static (spec-defined) and served to the student
 UI — it does not need to live in the database."""
+from datetime import datetime
+
 from app.db.base import utcnow
-from app.db.models import OrientationBatch, Student, Teacher
+from app.db.models import OrientationBatch, OrientationSlotRule, Student, Teacher
 from app.modules.notification import service as notif
+from app.shared import weekly
+from app.shared.weekly import (  # re-exported: the module's one schedule vocabulary
+    IST,
+    WEEKDAYS,
+    label,
+    occurrences,
+    parse_day,
+    parse_time,
+    to_ist,
+    to_naive_utc,
+    to_utc,
+)
+
+SLOT_HORIZON_WEEKS = weekly.DEFAULT_HORIZON_WEEKS
 
 # The self-navigated walkthrough shown to the student, one card per step. Mirrors
 # the product spec (Welcome → Walkthrough → Benefits → Expectations → Community &
@@ -62,7 +84,7 @@ ORIENTATION_STEPS: list[dict] = [
         "title": "Your Membership Benefits",
         "body": "Your SpeakEdge membership includes:",
         "points": [
-            "Lifetime Student ID & membership",
+            "Your own SpeakEdge Student ID",
             "Teacher-led and conversation team classes",
             "Complimentary CEFR & speaking assessments",
             "Community access and learning videos",
@@ -113,6 +135,13 @@ ORIENTATION_STEPS: list[dict] = [
 ]
 
 
+def _iso(dt: datetime | None) -> str | None:
+    """A session time on the wire is an explicit UTC instant — a naive string
+    would be read as browser-local and land 5.5 hours out."""
+    dt = to_utc(dt)
+    return dt.isoformat() if dt else None
+
+
 async def get_student_view(student: Student) -> dict:
     """Everything the student orientation page needs: status, progress, the
     walkthrough content and their assigned session (if any)."""
@@ -128,7 +157,7 @@ async def get_student_view(student: Student) -> dict:
                 "id": str(batch.id),
                 "title": batch.title,
                 "mode": batch.mode,
-                "scheduled_at": batch.scheduled_at.isoformat() if batch.scheduled_at else None,
+                "scheduled_at": _iso(batch.scheduled_at),
                 "duration_min": batch.duration_min,
                 "meeting_url": batch.meeting_url,
                 "recording_url": batch.recording_url,
@@ -155,9 +184,19 @@ async def get_student_view(student: Student) -> dict:
     }
 
 
+def has_started(batch: OrientationBatch) -> bool:
+    """A dated session that has already begun. Undated (recorded/self-paced)
+    sessions never expire — there is no start time to pass."""
+    when = to_naive_utc(batch.scheduled_at)
+    return bool(when and when < weekly.now_naive_utc())
+
+
 async def open_batches_for(student: Student) -> list[dict]:
     """Scheduled orientation classes a student may self-join. Empty once they've
-    already joined a class or completed orientation — they may only join one."""
+    already joined a class or completed orientation — they may only join one.
+
+    Sessions that have already started are dropped: weekly slots keep producing
+    dated sessions and a past one lingers until the purge grace period is up."""
     if student.orientation_batch_id or student.orientation_status == "completed":
         return []
     batches = await OrientationBatch.find(
@@ -166,6 +205,8 @@ async def open_batches_for(student: Student) -> list[dict]:
     ).sort(OrientationBatch.scheduled_at).to_list()
     out = []
     for b in batches:
+        if has_started(b):
+            continue
         teacher_name = None
         if b.teacher_id:
             t = await Teacher.get(b.teacher_id)
@@ -174,7 +215,7 @@ async def open_batches_for(student: Student) -> list[dict]:
             "id": str(b.id),
             "title": b.title,
             "mode": b.mode,
-            "scheduled_at": b.scheduled_at.isoformat() if b.scheduled_at else None,
+            "scheduled_at": _iso(b.scheduled_at),
             "duration_min": b.duration_min,
             "teacher_name": teacher_name,
             "agenda": b.agenda,
@@ -235,3 +276,41 @@ async def roster_for(batch: OrientationBatch) -> list[dict]:
             "in_this_batch": bool(s and s.orientation_batch_id == str(batch.id)),
         })
     return rows
+
+
+
+# ---------------------------------------------------------------------------
+# Weekly sessions — a weekday + a time, repeating
+# ---------------------------------------------------------------------------
+async def joined_batch_ids(batches) -> set[str]:
+    """Sessions that must never be moved or withdrawn under their students:
+    anyone has joined, or the session is no longer merely scheduled."""
+    return {str(b.id) for b in batches
+            if b.student_ids or b.status != "scheduled"}
+
+
+def _build(rule: OrientationSlotRule, when: datetime) -> OrientationBatch:
+    return OrientationBatch(
+        title=rule.title, mode="live", scheduled_at=when,
+        duration_min=rule.duration_min, teacher_id=rule.teacher_id,
+        meeting_url=rule.meeting_url, agenda=list(rule.agenda),
+        rule_id=str(rule.id),
+    )
+
+
+schedule = weekly.WeeklySchedule(
+    OrientationBatch, build=_build, in_use=joined_batch_ids,
+    purge_reason="Weekly orientation slot expired with nobody enrolled",
+)
+
+generate = schedule.generate
+rebuild = schedule.rebuild
+drop_future = schedule.drop_future
+purge_past = schedule.purge_past
+
+
+async def sync_all() -> dict:
+    """Scheduler pass over every live weekly orientation slot."""
+    rules = await OrientationSlotRule.find(
+        OrientationSlotRule.is_archived == False).to_list()  # noqa: E712
+    return await schedule.sync(rules)

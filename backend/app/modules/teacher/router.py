@@ -13,7 +13,9 @@ from pydantic import BaseModel, EmailStr
 from app.core.envelope import ok
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.core.cache import cache
-from app.core.rbac import CurrentUser, get_current_user, require_admin, require_role
+from app.core.rbac import (
+    CurrentUser, get_current_user, require_admin, require_role, require_teacher,
+)
 from app.shared.access import require_unlocked_teacher_student
 from app.core.security import Role, decode_token
 from app.db.base import utcnow
@@ -42,7 +44,6 @@ from app.shared.students import load_students_map
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
 
-require_teacher = require_role(Role.teacher)
 require_batch_manager = require_role(Role.admin, Role.teacher)  # + ownership via _assert_manages
 
 IST = timezone(timedelta(hours=5, minutes=30))  # ponytail: product is India-only; fixed offset
@@ -914,7 +915,7 @@ async def assign_students(batch_id: str, body: AssignStudents,
 
 
 # --------------------------------------------------------------------------
-# Batch join requests: student requests → admin/teacher approves
+# Batch join requests: student requests → admin approves (teachers cannot)
 # --------------------------------------------------------------------------
 class MemberRef(BaseModel):
     student_id: str
@@ -942,11 +943,17 @@ async def remove_student(batch_id: str, body: MemberRef,
     return ok(batch.model_dump(mode="json"))
 
 
-async def _batch_allowance(student_id: str) -> tuple[int, int]:
-    """(batches_used, batch_limit) for a student. The limit is the active
-    subscription plan's classes_per_week; used counts the batches the student
-    is already a member of plus any pending join requests. A limit of 0 means
-    there is no active subscription (batches are subscription-gated)."""
+async def _batch_allowance(student_id: str) -> tuple[int, int, bool]:
+    """(batches_used, batch_limit, has_membership) for a student.
+
+    The limit is the active subscription plan's `classes_per_week`, read live
+    off the catalogue so an admin edit applies to memberships already sold.
+    **Tribe and Basic include none** (`classes_per_week` 0): the batches stay
+    visible to them, but every way into one asks for an upgrade instead — a
+    floor of 1 here used to hand them a teacher-led class they never bought.
+    `used` counts the batches the student is already a member of plus any
+    pending join requests. `has_membership` separates "your plan does not
+    include this" from "you have no active membership at all"."""
     sub = await Subscription.find_one(
         Subscription.student_id == student_id, Subscription.is_active == True  # noqa: E712
     )
@@ -954,9 +961,10 @@ async def _batch_allowance(student_id: str) -> tuple[int, int]:
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     if not sub or expires is None or expires <= utcnow():
-        return 0, 0
+        return 0, 0, False
     plan = await PlanConfig.find_one(PlanConfig.plan == sub.plan)
-    limit = plan.classes_per_week if plan and plan.classes_per_week > 0 else 1
+    # No catalogue row for the plan (deleted key): fall back to one class.
+    limit = plan.classes_per_week if plan else 1
     # A course counts once even if the student joined several of its sessions:
     # count distinct series (sub-batches without a series fall back to their id).
     joined = await Batch.find({
@@ -964,7 +972,7 @@ async def _batch_allowance(student_id: str) -> tuple[int, int]:
         "$or": [{"student_ids": student_id}, {"pending_ids": student_id}],
     }).to_list()
     used = len({b.series_id or str(b.id) for b in joined})
-    return used, limit
+    return used, limit, True
 
 
 @router.post("/batches/{batch_id}/request-join")
@@ -978,9 +986,14 @@ async def request_join(batch_id: str, user: CurrentUser = Depends(require_unlock
         raise ConflictError("Your join request is already pending")
 
     # A student may join only as many batches as their subscription plan grants.
-    used, limit = await _batch_allowance(user.subject)
-    if limit == 0:
+    used, limit, has_membership = await _batch_allowance(user.subject)
+    if not has_membership:
         raise ForbiddenError("An active subscription is required to join batches.")
+    if limit == 0:
+        raise ForbiddenError(
+            "Teacher-led classes are not included in your membership. "
+            "Upgrade your membership to join a teacher-led class."
+        )
     if used >= limit:
         raise ConflictError(
             f"Your plan allows joining up to {limit} batch(es). "
@@ -991,7 +1004,10 @@ async def request_join(batch_id: str, user: CurrentUser = Depends(require_unlock
     batch.touch()
     await batch.save()
     await _log_batch(user, "batch.join_request", batch_id, student_id=user.subject)
-    return ok(message="Join request sent. You'll be notified once it's approved.")
+    await _notify_batch(batch, "New Batch Join Request",
+                        f"A student requested to join \"{batch.title}\" — awaiting admin approval.",
+                        "approval", include_students=False)
+    return ok(message="Join request sent. You'll be notified once an admin approves it.")
 
 
 @router.post("/batches/{batch_id}/withdraw-join")
@@ -1013,11 +1029,12 @@ async def withdraw_join(batch_id: str, user: CurrentUser = Depends(require_unloc
 
 @router.post("/batches/{batch_id}/approve-join")
 async def approve_join(batch_id: str, body: MemberRef,
-                       user: CurrentUser = Depends(require_batch_manager)):
+                       user: CurrentUser = Depends(require_admin)):
+    """Admin-only, like community-class join requests: the assigned teacher can
+    see the queue but never decides it."""
     batch = await Batch.get(batch_id)
     if not batch:
         raise NotFoundError("Batch not found")
-    await _assert_manages(batch, user)
     if body.student_id not in batch.pending_ids:
         raise NotFoundError("No such pending request")
     batch.pending_ids.remove(body.student_id)
@@ -1036,11 +1053,11 @@ async def approve_join(batch_id: str, body: MemberRef,
 
 @router.post("/batches/{batch_id}/reject-join")
 async def reject_join(batch_id: str, body: MemberRef,
-                      user: CurrentUser = Depends(require_batch_manager)):
+                      user: CurrentUser = Depends(require_admin)):
+    """Admin-only — see :func:`approve_join`."""
     batch = await Batch.get(batch_id)
     if not batch:
         raise NotFoundError("Batch not found")
-    await _assert_manages(batch, user)
     if body.student_id in batch.pending_ids:
         batch.pending_ids.remove(body.student_id)
         batch.touch()
@@ -1094,8 +1111,11 @@ async def browse_batches(user: CurrentUser = Depends(require_unlocked_teacher_st
             "member_count": len(b.student_ids),
             "attendance_submitted_dates": sorted(set(att_dates.get(str(b.id), []))),
         })
-    used, limit = await _batch_allowance(user.subject)
-    return ok({"batches": rows, "batches_used": used, "batch_limit": limit})
+    used, limit, has_membership = await _batch_allowance(user.subject)
+    return ok({"batches": rows, "batches_used": used, "batch_limit": limit,
+               # Drives the "Upgrade to join" state on the cards instead of a
+               # failed join attempt (mirrors GET /community/class-access).
+               "included": limit > 0, "can_join": has_membership and used < limit})
 
 
 @router.get("/batches/{batch_id}/detail")
@@ -1615,6 +1635,9 @@ def _session_of(b: Batch, row: dict, tmap: dict) -> dict:
         "slot_start": b.slot_start, "slot_end": b.slot_end,
         "class_time": b.class_time,
         "member_count": len(b.student_ids),
+        # Join requests live on the child sub-batch, but admins only ever see the
+        # course row — carry them onto the session so the series page can decide them.
+        "pending": row.get("pending") or [],
         "meeting_active": row.get("meeting_active"),
         "meeting_url": b.meeting_url,
         "attendance_done": (b.date or "") in (row.get("attendance_submitted_dates") or []),

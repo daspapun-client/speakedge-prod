@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { BookOpen, CheckCircle2, Download, PhoneCall } from 'lucide-react';
+import { CheckCircle2, Download, PhoneCall } from 'lucide-react';
+import { OrderSummary } from '@/features/checkout/OrderSummary';
 import { api, unwrap } from '@/lib/api';
 import { bookCheckout, type CheckoutResult } from '@/features/shop/bookCheckout';
 import { TermsAgreement } from '@/components/TermsAgreement';
+import { FirstMonthChoice } from '@/features/checkout/FirstMonthChoice';
 
 /**
  * Step 3 of the membership journey: Selected Membership + SpeakEdge Book ->
@@ -12,6 +14,15 @@ import { TermsAgreement } from '@/components/TermsAgreement';
  * Membership, and Book Shop -> SpeakEdge Book) land here with ?plan=.
  * The book itself is resolved server-side, so the caller never carries its id.
  * Membership is not sold by term: `months` only sets subscription validity.
+ *
+ * When no SpeakEdge Book is configured (or it is out of stock) this becomes a
+ * membership-only checkout rather than a dead end — the backend then charges no
+ * book price or delivery, and the address is kept as the billing record.
+ *
+ * `?offer=` is a new-student offer link (see OfferLinkPage): while it is live
+ * the admission fee is charged at the offer price instead. The token is only
+ * passed on once the server has confirmed the offer, so a lapsed link simply
+ * falls back to the regular price rather than failing the order.
  */
 
 interface Plan {
@@ -30,6 +41,15 @@ interface Plan {
   speaking_tests: number;
 }
 
+interface Offer {
+  token: string;
+  plan: string;
+  label: string;
+  price: number;      // paise — discounted admission fee
+  list_price: number; // paise — the regular fee it discounts from
+  expires_at: string; // UTC instant the link lapses
+}
+
 interface Book {
   id: string;
   name: string;
@@ -38,7 +58,10 @@ interface Book {
   description?: string | null;
   cover_image_url?: string | null;
   sell_price: number;
+  gst_rate?: number;
   available: number;
+  /** Paise charged for home delivery (server-owned, shown in the summary). */
+  delivery_charge: number;
 }
 
 const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
@@ -48,21 +71,40 @@ const priceFor = (p: Plan, months: number) =>
   p.prices?.[String(months)] || (p.offer_price ?? p.amount);
 
 export function CheckoutPage() {
+  const qc = useQueryClient();
   const [params] = useSearchParams();
-  const planKey = params.get('plan') ?? '';
+  const offerToken = params.get('offer') ?? '';
   const requested = Number(params.get('months')) || 12;
+
+  // An expired or unknown token 404s; the checkout then just runs at the
+  // regular price rather than stranding a buyer who is ready to pay.
+  const { data: offer, isPending: offerPending } = useQuery({
+    queryKey: ['admission-offer', offerToken],
+    queryFn: () => unwrap<Offer>(api.get(`/payments/admission-offers/${offerToken}`)),
+    enabled: !!offerToken,
+    retry: false,
+  });
+  const planKey = params.get('plan') || offer?.plan || '';
 
   const { data: plans = [], isLoading: plansLoading } = useQuery({
     queryKey: ['plans'],
     queryFn: () => unwrap<Plan[]>(api.get('/payments/plans')),
   });
-  const { data: book, isLoading: bookLoading, error: bookError } = useQuery({
+  // Optional: no SpeakEdge Book configured -> membership-only checkout.
+  const { data: available, isPending: bookPending } = useQuery({
     queryKey: ['speakedge-book'],
     queryFn: () => unwrap<Book>(api.get('/books/speakedge')),
     retry: false,
   });
+  // An inventory problem must not stop someone joining: when the book is out of
+  // stock the order becomes membership-only and the book is sent on separately.
+  const outOfStock = !!available && available.available <= 0;
+  const book = outOfStock ? undefined : available;
 
   const [delivery, setDelivery] = useState<'home' | 'office'>('home');
+  // Tiers with a monthly fee collect the first month upfront by default; the
+  // learner can switch to admission-only in FirstMonthChoice.
+  const [firstMonth, setFirstMonth] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<CheckoutResult | null>(null);
@@ -71,6 +113,8 @@ export function CheckoutPage() {
 
   const plan = plans.find((p) => p.plan === planKey);
   const months = plan?.durations?.includes(requested) ? requested : plan?.durations?.[0] ?? requested;
+  // The offer only applies to the plan it was created for.
+  const liveOffer = offer && offer.plan === planKey ? offer : null;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -86,7 +130,8 @@ export function CheckoutPage() {
         buyer_name: f.get('buyer_name') as string,
         phone: f.get('phone') as string,
         email: get('email'),
-        delivery_type: delivery,
+        // Nothing to deliver on a membership-only order.
+        delivery_type: book ? delivery : 'office',
         alt_phone: get('alt_phone'),
         address_line1: get('address_line1'),
         address_line2: get('address_line2'),
@@ -96,6 +141,8 @@ export function CheckoutPage() {
         state: get('state'),
         pin_code: get('pin_code'),
         delivery_instructions: get('delivery_instructions'),
+        include_first_month: firstMonth,
+        offer: liveOffer?.token,
         accept_terms: acceptTerms,
       });
       setPhone(f.get('phone') as string);
@@ -103,6 +150,10 @@ export function CheckoutPage() {
       window.scrollTo({ top: 0 });
     } catch (err) {
       setError((err as Error).message);
+      // The offer may have lapsed between opening the page and paying, which is
+      // what the server just refused on. Re-check it so the summary drops to the
+      // regular price instead of still quoting one the order cannot be placed at.
+      if (offerToken) qc.invalidateQueries({ queryKey: ['admission-offer', offerToken] });
     } finally {
       setSubmitting(false);
     }
@@ -114,7 +165,9 @@ export function CheckoutPage() {
       <div className="mx-auto max-w-xl">
         <div className="card text-center">
           <CheckCircle2 size={44} className="mx-auto text-green-600" />
-          <h1 className="mt-3 text-2xl font-extrabold text-brand">Order Placed Successfully</h1>
+          <h1 className="mt-3 text-2xl font-extrabold text-brand">
+            {result.paid ? 'Payment Confirmed' : 'Order Placed Successfully'}
+          </h1>
           <p className="mt-2 text-slate-600">
             Your order number is <span className="font-mono font-bold">{result.order_number}</span>.
           </p>
@@ -126,22 +179,55 @@ export function CheckoutPage() {
                 <span>{rupees(result.plan_amount)}</span>
               </div>
             )}
-            <div className="flex justify-between"><span>SpeakEdge Book</span><span>{rupees(result.book_amount)}</span></div>
-            {result.gst_amount > 0 && (
-              <div className="flex justify-between"><span>GST</span><span>{rupees(result.gst_amount)}</span></div>
+            {result.first_month_amount > 0 && (
+              <div className="flex justify-between">
+                <span>{plan?.label ?? result.plan} first month fee</span>
+                <span>{rupees(result.first_month_amount)}</span>
+              </div>
             )}
-            <div className="flex justify-between">
-              <span>Delivery</span>
-              <span>{result.delivery_charge ? rupees(result.delivery_charge) : 'Free (pickup)'}</span>
-            </div>
+            {book && (
+              <>
+                <div className="flex justify-between">
+                  <span>SpeakEdge Book</span><span className="text-emerald-600">Included</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Delivery</span>
+                  <span>{result.delivery_charge ? rupees(result.delivery_charge) : 'Free (pickup)'}</span>
+                </div>
+              </>
+            )}
             <div className="mt-1 flex justify-between border-t border-slate-200 pt-1 text-base font-bold text-slate-900">
-              <span>Total paid</span><span>{rupees(result.amount)}</span>
+              <span>{result.paid ? 'Total paid' : 'Total due'}</span><span>{rupees(result.amount)}</span>
             </div>
           </div>
 
+          {/* The code is the buyer's next step, so it goes here rather than
+              making them look it up on the tracking page. */}
+          {result.activation_code && (
+            <div className="mt-5 rounded-xl border border-brand-gold/40 bg-brand-gold/10 p-4 text-left">
+              <div className="text-xs font-semibold uppercase tracking-wide text-brand">
+                Your activation code
+              </div>
+              <div className="mt-1 font-mono text-xl font-bold text-slate-900">
+                {result.activation_code}
+              </div>
+              <p className="mt-2 text-sm text-slate-600">
+                {book
+                  ? 'This code is also printed inside your SpeakEdge Book. Use it to create your account whenever you are ready.'
+                  : 'Use this code to create your account and complete your registration.'}
+              </p>
+              <Link
+                to={`/activate?code=${encodeURIComponent(result.activation_code)}`}
+                className="btn-primary mt-3 inline-block"
+              >
+                Activate my membership
+              </Link>
+            </div>
+          )}
+
           <a
             href={`/api/v1/books/receipt/${encodeURIComponent(result.order_number)}?phone=${encodeURIComponent(phone)}`}
-            className="btn-primary mt-5 inline-flex items-center gap-2"
+            className="btn-ghost mt-5 inline-flex items-center gap-2"
           >
             <Download size={16} /> Download PDF Receipt
           </a>
@@ -162,7 +248,8 @@ export function CheckoutPage() {
     );
   }
 
-  if (plansLoading || bookLoading) return <p className="text-slate-500">Loading checkout…</p>;
+  if (plansLoading || bookPending || (!!offerToken && offerPending))
+    return <p className="text-slate-500">Loading checkout…</p>;
 
   if (!plan) {
     return (
@@ -177,100 +264,35 @@ export function CheckoutPage() {
     );
   }
 
-  if (!book) {
-    return (
-      <div className="card mx-auto max-w-lg text-center">
-        <h1 className="text-xl font-bold">The SpeakEdge Book is unavailable</h1>
-        <p className="mt-2 text-slate-600">
-          {(bookError as Error | null)?.message ?? 'Please check back shortly.'}
-        </p>
-        <Link to="/plans" className="btn-ghost mt-4 inline-block">Back to membership plans</Link>
-      </div>
-    );
-  }
-
-  const planPrice = priceFor(plan, months);
-  const outOfStock = book.available <= 0;
+  const planPrice = liveOffer ? liveOffer.price : priceFor(plan, months);
 
   return (
     <div>
       <h1 className="text-3xl font-extrabold">Checkout</h1>
       <p className="mt-2 text-slate-600">
-        Your membership and the SpeakEdge Book are purchased together in a single order.
+        {book
+          ? 'Your SpeakEdge Book is included with your membership — one order, one payment.'
+          : `Pay the one-time fee to join — your ${plan.label} membership starts once the payment is confirmed.`}
       </p>
 
+      {outOfStock && (
+        <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          The SpeakEdge Book is temporarily out of stock, so it is not part of this order and
+          nothing is being delivered. Our team will arrange your copy and contact you
+          about it within 48 hours.
+        </p>
+      )}
+
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.1fr]">
-        {/* Order summary */}
-        <div className="card self-start">
-          <h2 className="text-lg font-bold">Order summary</h2>
-
-          <div className="mt-4 border-b border-slate-100 pb-4">
-            <div className="flex justify-between gap-3">
-              <div>
-                <div className="font-semibold text-slate-900">{plan.label} Membership</div>
-                <div className="text-xs text-slate-500">One-time admission fee</div>
-              </div>
-              <div className="font-semibold">{rupees(planPrice)}</div>
-            </div>
-            {plan.monthly_fee > 0 && (
-              <p className="mt-1 text-xs text-slate-500">
-                Plus {rupees(plan.monthly_fee)}/month, billed separately — not part of this order.
-              </p>
-            )}
-            <ul className="mt-3 space-y-1 text-xs text-slate-500">
-              <li>
-                {plan.classes_per_week > 0
-                  ? `${plan.classes_per_week} teacher-led class${plan.classes_per_week === 1 ? '' : 'es'} / week`
-                  : 'AI-guided learning based on the SpeakEdge Book'}
-              </li>
-              <li>
-                {plan.conversation_per_week > 0
-                  ? `${plan.conversation_per_week} conversation teams + unlimited individual speaking partners`
-                  : 'Unlimited individual speaking partners'}
-              </li>
-              {plan.cefr_tests > 0 && (
-                <li>{plan.cefr_tests} CEFR · {plan.speaking_tests} Speaking test{plan.speaking_tests === 1 ? '' : 's'}</li>
-              )}
-              <li>Community access for {plan.community_years} year{plan.community_years === 1 ? '' : 's'}</li>
-              {plan.support_years > 0 && (
-                <li>Student relation support for {plan.support_years} years</li>
-              )}
-            </ul>
-            <Link to="/plans" className="mt-3 inline-block text-xs font-medium text-brand hover:underline">
-              Change plan
-            </Link>
-          </div>
-
-          <div className="mt-4 flex gap-3">
-            <div className="flex h-20 w-16 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-              {book.cover_image_url ? (
-                <img src={book.cover_image_url} alt={book.name} className="h-full w-full rounded-lg object-cover" />
-              ) : (
-                <BookOpen size={24} className="text-slate-300" />
-              )}
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between gap-3">
-                <div className="font-semibold text-slate-900">{book.name}</div>
-                <div className="font-semibold">{rupees(book.sell_price)}</div>
-              </div>
-              <div className="text-xs text-slate-500">{book.version} · {book.language}</div>
-              {book.description && <p className="mt-1 line-clamp-3 text-xs text-slate-500">{book.description}</p>}
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-1 border-t border-slate-200 pt-4 text-sm text-slate-600">
-            <div className="flex justify-between"><span>Membership</span><span>{rupees(planPrice)}</span></div>
-            <div className="flex justify-between"><span>SpeakEdge Book</span><span>{rupees(book.sell_price)}</span></div>
-            <div className="flex justify-between">
-              <span>Delivery</span>
-              <span className="text-slate-400">{delivery === 'home' ? 'Added at payment' : 'Free (pickup)'}</span>
-            </div>
-            <div className="mt-1 flex justify-between border-t border-slate-200 pt-2 text-base font-bold text-slate-900">
-              <span>Subtotal</span><span>{rupees(planPrice + book.sell_price)}</span>
-            </div>
-          </div>
-        </div>
+        <OrderSummary
+          plan={plan}
+          planPrice={planPrice}
+          book={book}
+          delivery={delivery}
+          deliveryCharge={book?.delivery_charge ?? 0}
+          firstMonth={firstMonth ? plan.monthly_fee : 0}
+          offer={liveOffer && { listPrice: liveOffer.list_price, expiresAt: liveOffer.expires_at }}
+        />
 
         {/* Buyer + delivery */}
         <form onSubmit={onSubmit} className="card grid gap-3 self-start">
@@ -297,21 +319,27 @@ export function CheckoutPage() {
             Our executive calls this number within 48 hours of your order.
           </p>
 
-          <div>
-            <label className="label">Delivery</label>
-            <div className="flex gap-4 text-sm">
-              <label className="flex items-center gap-2">
-                <input type="radio" name="delivery_type" checked={delivery === 'home'} onChange={() => setDelivery('home')} />
-                Home delivery
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" name="delivery_type" checked={delivery === 'office'} onChange={() => setDelivery('office')} />
-                Office pickup
-              </label>
+          {/* Nothing ships on a membership-only order, so the address is
+              collected as the billing address instead. */}
+          {book ? (
+            <div>
+              <label className="label">Delivery</label>
+              <div className="flex gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="delivery_type" checked={delivery === 'home'} onChange={() => setDelivery('home')} />
+                  Home delivery
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="delivery_type" checked={delivery === 'office'} onChange={() => setDelivery('office')} />
+                  Office pickup
+                </label>
+              </div>
             </div>
-          </div>
+          ) : (
+            <h2 className="mt-2 text-lg font-bold">Billing address</h2>
+          )}
 
-          {delivery === 'home' && (
+          {(!book || delivery === 'home') && (
             <div className="grid gap-3">
               <div>
                 <label className="label">Address line 1 *</label>
@@ -343,18 +371,27 @@ export function CheckoutPage() {
                 <label className="label">PIN code *</label>
                 <input name="pin_code" className="input" required />
               </div>
-              <div>
-                <label className="label">Delivery instructions</label>
-                <input name="delivery_instructions" className="input" />
-              </div>
+              {book && (
+                <div>
+                  <label className="label">Delivery instructions</label>
+                  <input name="delivery_instructions" className="input" />
+                </div>
+              )}
             </div>
           )}
+
+          <FirstMonthChoice
+            monthlyFee={plan.monthly_fee}
+            admission={planPrice}
+            value={firstMonth}
+            onChange={setFirstMonth}
+          />
 
           <TermsAgreement checked={acceptTerms} onChange={setAcceptTerms} />
 
           {error && <p className="text-sm text-red-600">{error}</p>}
-          <button className="btn-primary" disabled={submitting || outOfStock || !acceptTerms}>
-            {submitting ? 'Placing order…' : outOfStock ? 'Book out of stock' : 'Place Order'}
+          <button className="btn-primary" disabled={submitting || !acceptTerms}>
+            {submitting ? 'Opening payment…' : 'Pay now'}
           </button>
           {!acceptTerms && (
             <p className="-mt-2 text-xs text-slate-500">
@@ -362,8 +399,9 @@ export function CheckoutPage() {
             </p>
           )}
           <p className="text-xs text-slate-400">
-            You&apos;ll pay securely via Razorpay. After payment you can download your receipt, and
-            your membership is activated once our executive completes your onboarding.
+            You&apos;ll pay securely via Razorpay. After payment you can download your receipt
+            {book ? ', and' : ' and see your activation code on the order page;'} your membership is
+            activated once our executive completes your onboarding.
           </p>
         </form>
       </div>

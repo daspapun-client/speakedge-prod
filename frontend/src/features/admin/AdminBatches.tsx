@@ -478,7 +478,7 @@ export function AdminBatches() {
   return (
     <div>
       <PageHeader
-        title="Batches"
+        title="Teacher-led Batches"
         description="Create a course, generate its classes, assign teachers and members per class, and track every class date."
         actions={<button className="btn-primary" onClick={() => setCreating(true)}>New course</button>}
       />

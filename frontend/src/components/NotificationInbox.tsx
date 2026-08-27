@@ -44,7 +44,7 @@ interface Notif {
 const KIND_META: Record<string, { icon: LucideIcon; tone: string; label: string }> = {
   membership: { icon: Users, tone: 'bg-violet-100 text-violet-600', label: 'Membership' },
   subscription: { icon: CreditCard, tone: 'bg-amber-100 text-amber-700', label: 'Subscription' },
-  community: { icon: Users, tone: 'bg-teal-100 text-teal-600', label: 'Community Class' },
+  community: { icon: Users, tone: 'bg-teal-100 text-teal-600', label: 'Community Classes' },
   batch: { icon: MessageCircle, tone: 'bg-indigo-100 text-indigo-600', label: 'Batch' },
   exam: { icon: GraduationCap, tone: 'bg-sky-100 text-sky-600', label: 'Exam' },
   payment: { icon: Receipt, tone: 'bg-emerald-100 text-emerald-600', label: 'Payment' },
@@ -127,7 +127,7 @@ function InboxSkeleton() {
   );
 }
 
-export function NotificationInbox() {
+export function NotificationInbox({ compact = false }: { compact?: boolean }) {
   const { role, subject } = useAuth();
   const isAdmin = role === 'admin' || role === 'super_admin';
   const adminKey = subject ?? 'admin';
@@ -236,18 +236,29 @@ export function NotificationInbox() {
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        className={`relative rounded-xl p-2.5 transition-all ${
-          open
-            ? 'bg-brand/10 text-brand ring-2 ring-brand/20'
-            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
-        }`}
+        className={
+          compact
+            ? 'mobile-topbar-icon-btn'
+            : `relative rounded-xl p-2.5 transition-all ${
+                open
+                  ? 'bg-brand/10 text-brand ring-2 ring-brand/20'
+                  : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+              }`
+        }
+        data-open={compact ? open : undefined}
         aria-label={badge ? `Notifications, ${unreadCount} unread` : 'Notifications'}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <Bell size={18} strokeWidth={open ? 2.25 : 2} />
+        <Bell size={compact ? 19 : 18} strokeWidth={open ? 2.25 : 2} />
         {badge && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-rose-600 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
+          <span
+            className={
+              compact
+                ? 'absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-rose-600 px-0.5 text-[9px] font-bold text-white shadow-sm ring-2 ring-white'
+                : 'absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-rose-600 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-white'
+            }
+          >
             {badge}
           </span>
         )}

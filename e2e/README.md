@@ -1,124 +1,110 @@
-# SpeakEdge — The Complete English Communication Ecosystem
+# SpeakEdge — Playwright E2E Suite
 
-API-first **modular monolith**: **React + TypeScript (Vite/PWA)** ⇄ **Python 3 / FastAPI** ⇄ **MongoDB**, with Redis-optional caching/rate-limiting. Built from the design docs in [`docs/`](docs/) and the 240-page `SpeakEdge Section.pdf`.
+Two Playwright projects:
 
-> **What's in this build.** The full **Identity Spine is implemented and tested end-to-end** (auth → activation codes → membership + 72h verification → student dashboard → admin → Razorpay payments → invoices → notifications). All **16 domain modules exist as real, extendable endpoints** (community, teacher, partner, orientation, exams/certification, video, analytics, leads, subscription) so nothing from the spec is structurally missing. Deferred module depth is listed in [`docs/01-7-Day-Project-Plan.md`](docs/01-7-Day-Project-Plan.md) §6.
+- **`api`** — end-to-end **happy-path** coverage for all **16 domain modules**,
+  driven through the public HTTP API (`request` fixture). No browser needed.
+- **`ui`** — real **browser automation** (Chromium) of the React app: public
+  pages, admin login/navigation, and a verified-student login. Supports **headed**
+  runs.
 
----
+## What it covers
 
-## Scale & concurrency (target: 1000 concurrent users)
+`tests/journey.spec.ts` runs one serial journey that mirrors the real user
+lifecycle — each module reuses state from the previous one:
 
-The stack is designed to handle 1000 concurrent users, not just 500:
+| # | Module | Happy path exercised |
+|---|--------|----------------------|
+| 1 | Activation Codes | admin generates a batch, stats + listing |
+| 2 | Membership + 72h verification | activate with a code → admin approve → student login |
+| 3 | Payments (Razorpay) | list plans → create order → verify (test-mode) |
+| 4 | Subscription | active subscription after payment |
+| 5 | Student Dashboard | home + profile + every panel |
+| 6 | Notifications & Notices | admin direct message + banner, student reads |
+| 7 | Speaking Community | public stats/members, profile, team |
+| 8 | Book Shop & Orders | product → catalogue → checkout → tracking → reports |
+| 9 | Teacher System | apply → certify + link login → dashboard + batch |
+| 10 | Partner Network | apply → approve + link login → dashboard + leads + report |
+| 11 | Orientation | slot → student books → host completes |
+| 12 | Exams & Certification | exam → book → examiner report → public verify |
+| 13 | Video Preservation | publish video + category → student watch history |
+| 14 | Leads / Free Demo | public demo booking → admin update |
+| 15 | Analytics & Reports | summary aggregates + CSV export |
+| 16 | Admin Panel | overview, students, verification queue, offers, logs |
 
-| Concern | How it scales |
-|---|---|
-| **Stateless auth** | JWT access + refresh — no server session, so any worker/instance can serve any request. |
-| **Async I/O** | FastAPI + Motor/Beanie async all the way down; a few workers handle thousands of in-flight requests. |
-| **Workers** | Gunicorn + Uvicorn workers (`run_prod.sh`, `WORKERS` env). Add workers/instances horizontally behind Nginx. |
-| **Cache + rate-limit** | Redis when `REDIS_URL` is set (shared across workers); transparent in-memory fallback for local dev. |
-| **DB pooling** | Motor client `maxPoolSize=100`; indexes on every hot query path (see `app/db/models.py`). |
-| **Media offload** | Uploads/PDFs go to disk locally, S3/R2 in prod (`STORAGE_BACKEND=s3`) — never the DB. |
+`tests/health.spec.ts` is an independent sanity check for the API + DB.
 
----
+### UI automation (`tests-ui/`)
 
-## Prerequisites (local, no Docker)
+| Spec | What it drives in the browser |
+|------|-------------------------------|
+| `public.spec.ts` | home hero + nav, plans (live data), free-demo submit, verify-code, logged-out subscribe → login |
+| `auth.spec.ts` | admin login → overview → sidebar nav → logout; verified-student login → dashboard |
 
-- **Python 3.12+** (tested on 3.13)
-- **Node.js 20 LTS**
-- **MongoDB** — the one external dependency. Either:
-  - Install **MongoDB Community Server** (Windows) and run it on `mongodb://localhost:27017`, **or**
-  - Use a free **MongoDB Atlas** cluster and set `MONGO_URI` in `backend/.env`.
-- **Redis** — *optional*. Leave `REDIS_URL` blank to use the in-memory fallback.
+The student-login test seeds an approved account through the API first
+(`tests-ui/helpers/seed.ts`), then logs in via the UI.
 
----
+## Prerequisites
 
-## Run it
-
-### 1) Backend (FastAPI)
+A running, **seeded** backend with MongoDB:
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env          # adjust MONGO_URI if using Atlas
-python -m app.db.seed           # creates super-admin + demo activation codes
-.\run_dev.ps1                   # http://localhost:8000  (Swagger at /docs)
+cd ..\backend
+python -m app.db.seed        # super-admin + examiner + demo activation codes
+.\run_dev.ps1                # http://localhost:8000
 ```
 
-Seeded logins (change in production):
-- **Super Admin** — `admin@speakedge.in` / `Admin@12345`
-- **Examiner** — `examiner@speakedge.in` / `Examiner@123`
-- The seed prints **5 demo activation codes** — use one on the Activate page.
+The tests are safe to re-run against a persistent DB — every record uses a
+unique suffix so runs don't collide.
 
-### 2) Frontend (React + Vite)
+## Run
 
 ```powershell
-cd frontend
+cd e2e
 npm install
-npm run dev                     # http://localhost:5173  (proxies /api -> :8000)
+
+# --- API only (needs a seeded backend) ---
+npm run test:api
+
+# --- UI (needs backend + frontend dev server running) ---
+npm run install:browsers     # one-time: download Chromium
+npm run test:ui              # headless
+npm run test:ui:headed       # headed  (watch it drive the browser)
+
+npm test                     # both projects
+npm run report               # open the HTML report
 ```
 
-Then: open `http://localhost:5173` → **Activate** with a seeded code → check status → log in as admin → **Verification Queue** → Approve → log in as the student → **Subscribe** (test-mode payment) → download invoice.
+From the repo root there are also one-click launchers:
 
-### Production backend (Linux)
-
-```bash
-WORKERS=4 ./run_prod.sh         # gunicorn + uvicorn workers
+```bat
+test-e2e.bat                 REM API suite (all 16 modules)
+test-ui.bat                  REM UI suite, headed
 ```
-Front it with Nginx (TLS, static React build, `/api` proxy) per [`docs/04-Infrastructure.md`](docs/04-Infrastructure.md).
 
----
+### Targets
 
-## Verify it works
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `API_BASE_URL` | `http://127.0.0.1:8000` | where the API lives (api tests + UI seeding) |
+| `WEB_BASE_URL` | `http://127.0.0.1:5173` | where the React app is served (UI tests) |
+| `HEADED` | _(unset)_ | set to run the UI project headed |
+
+The Vite dev server proxies `/api` to `http://localhost:8000`; override with
+`VITE_API_PROXY` (e.g. `set VITE_API_PROXY=http://localhost:8010 && npm run dev`)
+to point the frontend at a backend on another port.
 
 ```powershell
-cd backend
-.\.venv\Scripts\python.exe -m pytest -q
+# example: everything on non-default ports
+$env:API_BASE_URL="http://127.0.0.1:8010"; $env:WEB_BASE_URL="http://localhost:5180"; npm run test:ui:headed
 ```
 
-`tests/test_golden_path.py` runs the **entire spine end-to-end against an in-memory Mongo** (no real DB needed): seed → generate code → activate → single-use enforcement → pending → approve → student login → dashboard → create order → verify signature → invoice → subscription + exam eligibility. `tests/test_smoke.py` asserts all 16 module routers are registered.
+## Notes
 
-```
-frontend> npm run build        # type-checks + builds the PWA
-```
-
----
-
-## Project layout
-
-```
-speakedge/
-├─ docs/                     # architecture, tech-stack, infra, 7-day plan
-├─ backend/
-│  ├─ app/
-│  │  ├─ core/               # config, security(JWT), rbac, exceptions, cache, ratelimit, envelope
-│  │  ├─ db/                 # mongo client, audited base model, all documents, indexes, seed
-│  │  ├─ shared/             # file/image compression, pdf, email, scheduler, audit
-│  │  ├─ modules/            # 16 domain modules (router/schemas/service/…)
-│  │  └─ main.py             # app wiring, middleware, router registration
-│  ├─ tests/                 # smoke + golden-path (in-memory Mongo)
-│  ├─ requirements.txt · .env.example · run_dev.ps1 · run_prod.sh
-└─ frontend/
-   └─ src/{app,features,lib,styles}  # layouts + public/auth/membership/dashboard/admin/payments
-```
-
-## API
-
-Every capability is a REST endpoint under `/api/v1` returning a uniform envelope
-`{ success, data, message, error }`. Full interactive docs at **`/docs`** (Swagger) and **`/redoc`** — share these with the future Flutter team (API-first mandate).
-
-## Cross-cutting guarantees (wired from day one)
-
-- **Activation Code = permanent Student ID** (`SPK-26-XXXXXX`), DB-unique + collision-retry.
-- **Archive-first soft delete** on every collection (60-day retention, background purge job).
-- **RBAC** (`super_admin/admin/examiner/teacher/partner/student`) guarding every route.
-- **Audit log** on auth, activation, payments, approvals, archive/restore, exam submission.
-- **Server-side image compression** (Pillow) enforcing photo ≤500 KB / ID ≤1 MB.
-- **PDF** invoices, CEFR report cards, certificates (ReportLab) with public verification codes.
-- **Razorpay** order → server-side signature verify → idempotent activation → invoice; webhook + manual-approval + refund paths.
-- **PWA**: installable, offline page, persistent login, service worker.
-
-## Not yet deep (scaffolded, ready to extend)
-
-Per the plan's realistic roadmap, these modules have working endpoints/models but not full UI/business depth yet: Partner microsites & reporting, Teacher remuneration workflows, Community teams/safety-card UI, Orientation reminders UI, Exam examiner dashboard UI, Video admin UI, Analytics report variety, GST invoicing edge cases. See `docs/01-7-Day-Project-Plan.md` §6.
+- **Test-mode payments:** with no live Razorpay keys the gateway returns
+  `order_test_*` ids, and `verify` skips signature checks and fulfils the order —
+  so the subscription/exam-eligibility flow is exercised without real money.
+- **Seeded logins** live in `tests/helpers/data.ts` (`SEED`); teacher/partner
+  logins are created on the fly via the admin staff endpoint.
+- To have Playwright start the backend for you, uncomment the `webServer` block
+  in `playwright.config.ts` (requires MongoDB running).

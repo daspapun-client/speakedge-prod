@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -25,8 +25,13 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    username: str  # email or student_id / staff username
+
+
 class ResetPasswordRequest(BaseModel):
-    username: str
+    token: str
+    new_password: str = Field(min_length=8)
 
 
 class MeOut(BaseModel):

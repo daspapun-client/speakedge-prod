@@ -27,7 +27,8 @@ export function membershipForm(code: string, password: string) {
   return {
     code,
     full_name: `E2E Student ${tag}`,
-    age: '19',
+    // Age and the Kids/Adult section are derived from the date of birth.
+    dob: `${new Date().getFullYear() - 19}-01-01`,
     gender: 'male',
     phone: '9800000001',
     whatsapp: '9800000001',
@@ -38,14 +39,17 @@ export function membershipForm(code: string, password: string) {
     password,
     email: `e2e_${tag}@example.com`,
     cefr_level: 'B1',
+    education_level: 'Graduate',
     about_me: 'Automated end-to-end happy-path test student.',
     consent_community_rules: 'true',
     consent_terms: 'true',
     consent_safety_policy: 'true',
     consent_non_refund: 'true',
     consent_process: 'true',
+    id_proof_type: 'Masked Aadhaar',
     photo: { name: 'photo.png', mimeType: 'image/png', buffer: PNG_1x1 },
     id_proof: { name: 'id_proof.png', mimeType: 'image/png', buffer: PNG_1x1 },
+    education_proof: { name: 'education.png', mimeType: 'image/png', buffer: PNG_1x1 },
   };
 }
 

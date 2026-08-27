@@ -1,11 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode } from 'react';
 import {
-  CreditCard, Calendar, BookOpen, GraduationCap, Mic, ArrowRight, Clock, type LucideIcon,
+  CreditCard, Calendar, BookOpen, GraduationCap, Mic, Clock, type LucideIcon,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { PageHeader, StatusBadge, fmtDay } from '@/features/admin/_shared';
+import { UpgradePlanCta } from '@/features/dashboard/UpgradePlanCta';
+import { PlanChangePanel } from '@/features/dashboard/PlanChangePanel';
+import { DashboardOffersSection } from '@/features/dashboard/DashboardOffersSection';
 
 interface Sub {
   id?: string;
@@ -142,15 +145,9 @@ export function SubscriptionPage() {
             />
           </div>
 
-          <div className="card flex flex-wrap items-center justify-between gap-4 bg-brand/5 border-brand/20">
-            <div>
-              <p className="font-semibold text-slate-800">Need more classes or a longer plan?</p>
-              <p className="mt-1 text-sm text-slate-500">Compare all plans and upgrade without losing your membership.</p>
-            </div>
-            <Link to="/plans" className="btn-primary inline-flex items-center gap-2">
-              Upgrade plan <ArrowRight size={16} />
-            </Link>
-          </div>
+          <PlanChangePanel />
+          <DashboardOffersSection enabled />
+          <UpgradePlanCta />
         </>
       ) : (
         <div className="card overflow-hidden p-0 text-center">
@@ -166,6 +163,8 @@ export function SubscriptionPage() {
           </div>
         </div>
       )}
+
+      {!current && <DashboardOffersSection enabled />}
 
       <div>
         <PageHeader title="History" description="Past and current subscription records" />
