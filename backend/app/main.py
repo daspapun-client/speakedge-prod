@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.cache import cache
@@ -104,10 +104,24 @@ async def add_request_context(request: Request, call_next):
     return response
 
 
-# Serve uploaded media locally (S3/R2 signed URLs replace this in prod).
-media_dir = Path(file_service.media_root())
-media_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+# Uploaded media. Both backends answer on the same /media/<subdir>/<name> path
+# that file_service.save_bytes hands out, so switching STORAGE_BACKEND needs no
+# DB migration and no frontend change.
+if file_service.s3_enabled():
+    # The bucket is private: mint a short-lived presigned URL per request and
+    # redirect. 307 keeps the method and is not cached, so a link never outlives
+    # the signature on it. S3 serves range requests, so <video> seeking works.
+    @app.get("/media/{key:path}")
+    async def media_redirect(key: str):
+        if not key or ".." in key:
+            raise HTTPException(status_code=404, detail="Not found")
+        return RedirectResponse(file_service.presigned_url(key), status_code=307)
+
+    log.info("Media served from S3 bucket %s (%s)", settings.S3_BUCKET, settings.S3_REGION)
+else:
+    media_dir = Path(file_service.media_root())
+    media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
 
 # Register all module routers under the versioned prefix.
 for r in MODULE_ROUTERS:

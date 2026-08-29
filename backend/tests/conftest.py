@@ -23,6 +23,17 @@ def _reset_rate_limits():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _local_storage(monkeypatch):
+    """Keep uploads on disk even when .env points STORAGE_BACKEND at a real
+    bucket — same reasoning as the Razorpay stub below: the suite must never
+    reach the network, and a test upload must not litter the live bucket."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
+    yield
+
+
 @pytest_asyncio.fixture
 async def client(monkeypatch):
     # Patch init_db to use an in-memory Mongo client + Beanie.

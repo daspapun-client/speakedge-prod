@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""
     S3_REGION: str = "auto"
+    # How long a /media presigned link stays valid. Short by design: the URL is
+    # minted per request, so nothing needs it to outlive the page that renders it.
+    S3_PRESIGN_EXPIRY: int = 3600
 
     # --- Razorpay ---
     RAZORPAY_KEY_ID: str = "rzp_test_xxxxxxxx"

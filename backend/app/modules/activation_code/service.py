@@ -126,3 +126,98 @@ async def bulk_delete(codes: list[str], actor: str, reason: str | None = None) -
         except AppError as exc:
             skipped.append({"code": code.strip(), "reason": exc.message})
     return {"deleted": len(deleted), "codes": deleted, "skipped": skipped}
+
+
+_MAX_IMPORT = 5000
+
+
+def _parse_import_xlsx(raw: bytes) -> list[tuple[str, PromptAudience | None, str | None]]:
+    """Rows from the Export Excel layout: code + course columns. Other columns
+    are ignored — we never restore activated/student state from a spreadsheet."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from app.core.exceptions import ValidationAppError
+
+    try:
+        wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValidationAppError("Could not read the Excel file") from exc
+    ws = wb.active
+    if ws is None:
+        raise ValidationAppError("The Excel file has no sheet")
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        header = next(rows_iter)
+    except StopIteration:
+        raise ValidationAppError("The Excel file is empty")
+    names = [str(c).strip().lower() if c is not None else "" for c in header]
+    if "code" not in names:
+        raise ValidationAppError("Excel must have a 'code' column (same as Export Excel)")
+    code_i = names.index("code")
+    course_i = names.index("course") if "course" in names else (
+        names.index("audience") if "audience" in names else None
+    )
+    parsed: list[tuple[str, PromptAudience | None, str | None]] = []
+    for row in rows_iter:
+        if not row or all(c is None or str(c).strip() == "" for c in row):
+            continue
+        code = str(row[code_i]).strip() if code_i < len(row) and row[code_i] is not None else ""
+        if not code or code.lower() == "none":
+            parsed.append(("", None, "missing code"))
+            continue
+        audience: PromptAudience | None = PromptAudience.adults
+        if course_i is not None and course_i < len(row) and row[course_i] not in (None, ""):
+            course = str(row[course_i]).strip().lower()
+            try:
+                audience = PromptAudience(course)
+            except ValueError:
+                parsed.append((code, None, f"unknown course '{row[course_i]}'"))
+                continue
+        parsed.append((code, audience, None))
+    return parsed
+
+
+async def import_from_xlsx(raw: bytes) -> dict:
+    """Insert unused codes from an Export Excel file. Existing codes are left
+    untouched and returned in `existing` so admin can see the flags."""
+    from app.core.exceptions import ValidationAppError
+
+    parsed = _parse_import_xlsx(raw)
+    if not parsed:
+        raise ValidationAppError("No data rows in the spreadsheet")
+    if len(parsed) > _MAX_IMPORT:
+        raise ValidationAppError(f"At most {_MAX_IMPORT} rows per import")
+
+    batch_id = uuid.uuid4().hex[:12]
+    imported: list[str] = []
+    existing: list[str] = []
+    invalid: list[dict] = []
+    seen: set[str] = set()
+    for code, audience, err in parsed:
+        if err:
+            invalid.append({"code": code, "reason": err})
+            continue
+        if code in seen:
+            existing.append(code)
+            continue
+        seen.add(code)
+        if await ActivationCode.find_one(ActivationCode.code == code):
+            existing.append(code)
+            continue
+        try:
+            await ActivationCode(
+                code=code, status=CodeStatus.unused,
+                batch_id=batch_id, audience=audience or PromptAudience.adults,
+            ).insert()
+            imported.append(code)
+        except DuplicateKeyError:
+            existing.append(code)
+    return {
+        "batch_id": batch_id,
+        "imported": len(imported),
+        "codes": imported,
+        "existing": existing,
+        "invalid": invalid,
+    }

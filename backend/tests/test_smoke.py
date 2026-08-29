@@ -12,6 +12,7 @@ def test_all_modules_registered():
     expected_prefixes = [
         "/api/v1/auth/login",
         "/api/v1/activation-codes/generate",
+        "/api/v1/activation-codes/import",
         "/api/v1/activation-codes/stats",
         "/api/v1/activation-codes/manual-activate",
         "/api/v1/membership/activate",

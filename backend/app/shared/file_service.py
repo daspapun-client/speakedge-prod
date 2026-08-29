@@ -1,11 +1,17 @@
 """File storage + server-side image compression (Pillow).
 
 - Compresses profile photos / ID proofs and enforces size limits.
-- Local disk backend by default; S3/R2 path stubbed via boto3 when configured.
+- Two backends, one contract: every save_* returns a `/media/<subdir>/<name>`
+  path regardless of where the bytes actually live. Local mode serves that path
+  from disk; S3 mode stores the object under `<subdir>/<name>` and the /media
+  route in main.py redirects to a presigned URL. Keeping the stored string
+  identical in both modes is what lets the DB rows and every frontend
+  `<img src>` stay untouched when the backend is switched.
 """
 import io
 import os
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image
@@ -47,32 +53,65 @@ def compress_image(raw: bytes, max_kb: int, max_dim: int = 1600) -> bytes:
     return buf.getvalue()
 
 
-def save_bytes(data: bytes, subdir: str, ext: str = "jpg") -> str:
-    """Persist bytes and return a URL/path the API can serve or sign."""
-    if settings.STORAGE_BACKEND == "s3" and settings.S3_BUCKET:
-        return _save_s3(data, subdir, ext)
-    base = _ensure_dir() / subdir
-    base.mkdir(parents=True, exist_ok=True)
-    name = f"{uuid.uuid4().hex}.{ext}"
-    path = base / name
-    path.write_bytes(data)
-    # Served by the static /media mount (see main.py)
-    return f"/media/{subdir}/{name}"
+# The bucket is private, so a stored object is only ever read back through a
+# presigned URL. Serving the right type matters there: S3 echoes ContentType on
+# the GET, and a PDF or MP4 labelled image/jpeg downloads instead of rendering.
+CONTENT_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "pdf": "application/pdf",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+}
 
 
-def _save_s3(data: bytes, subdir: str, ext: str) -> str:  # pragma: no cover - needs creds
+def s3_enabled() -> bool:
+    return settings.STORAGE_BACKEND == "s3" and bool(settings.S3_BUCKET)
+
+
+@lru_cache(maxsize=1)
+def _client():
+    """One boto3 client for the process. Building it per upload re-reads config
+    and re-negotiates TLS on every profile photo."""
     import boto3
 
-    client = boto3.client(
+    return boto3.client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT or None,
         aws_access_key_id=settings.S3_ACCESS_KEY,
         aws_secret_access_key=settings.S3_SECRET_KEY,
         region_name=settings.S3_REGION,
     )
-    key = f"{subdir}/{uuid.uuid4().hex}.{ext}"
-    client.put_object(Bucket=settings.S3_BUCKET, Key=key, Body=data, ContentType="image/jpeg")
-    return f"{settings.S3_ENDPOINT}/{settings.S3_BUCKET}/{key}"
+
+
+def save_bytes(data: bytes, subdir: str, ext: str = "jpg") -> str:
+    """Persist bytes and return the `/media/<subdir>/<name>` path they are read
+    back through. The path shape is identical on both backends."""
+    name = f"{uuid.uuid4().hex}.{ext}"
+    if s3_enabled():
+        _client().put_object(
+            Bucket=settings.S3_BUCKET,
+            Key=f"{subdir}/{name}",
+            Body=data,
+            ContentType=CONTENT_TYPES.get(ext, "application/octet-stream"),
+        )
+    else:
+        base = _ensure_dir() / subdir
+        base.mkdir(parents=True, exist_ok=True)
+        (base / name).write_bytes(data)
+    # Served by the /media route in main.py (static file, or redirect to S3).
+    return f"/media/{subdir}/{name}"
+
+
+def presigned_url(key: str) -> str:  # pragma: no cover - needs creds
+    """Short-lived read URL for an object key (the `/media/` prefix stripped)."""
+    return _client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.S3_BUCKET, "Key": key},
+        ExpiresIn=settings.S3_PRESIGN_EXPIRY,
+    )
 
 
 def save_photo(raw: bytes) -> str:

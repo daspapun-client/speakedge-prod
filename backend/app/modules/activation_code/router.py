@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.envelope import ok
+from app.core.exceptions import ValidationAppError
 from app.core.rbac import CurrentUser, require_admin
 from app.db.models import ActivationCode, CodeStatus, PromptAudience
 from app.modules.activation_code import service
@@ -196,6 +197,28 @@ async def bulk_delete(body: BulkDeleteRequest, admin: CurrentUser = Depends(requ
             meta={"deleted": result["deleted"], "skipped": len(result["skipped"])},
         )
     return ok(result, f"Deleted {result['deleted']} code(s)")
+
+
+@router.post("/import")
+async def import_codes(file: UploadFile = File(...), admin: CurrentUser = Depends(require_admin)):
+    """Load unused codes from an Export Excel (.xlsx) file. Duplicates are
+    flagged in `existing` and never overwritten."""
+    name = (file.filename or "").lower()
+    if not name.endswith(".xlsx"):
+        raise ValidationAppError("Upload an Excel .xlsx file (same columns as Export Excel)")
+    raw = await file.read()
+    if not raw:
+        raise ValidationAppError("The file is empty")
+    result = await service.import_from_xlsx(raw)
+    await log_activity(
+        admin.subject, "activation.import", role=admin.role.value,
+        meta={"batch_id": result["batch_id"], "imported": result["imported"],
+              "existing": len(result["existing"]), "invalid": len(result["invalid"])},
+    )
+    msg = f"Imported {result['imported']} codes"
+    if result["existing"]:
+        msg += f"; {len(result['existing'])} already existed"
+    return ok(result, msg)
 
 
 @router.get("/export")
