@@ -95,9 +95,8 @@ function PaymentRow({ payment: p }: { payment: Payment }) {
       </div>
       <div className="flex flex-wrap items-center gap-2 sm:justify-end">
         <StatusBadge status={p.status} />
-        {/* The receipt is rendered on demand from the payment, so it is
-            available even before an invoice has been generated. Authenticated,
-            hence a blob download rather than a plain link. */}
+        {/* Both PDFs are rendered on demand from the payment — receipts always,
+            invoices too, because the /media copy is gone after a redeploy. */}
         <button
           type="button"
           className="btn-ghost py-1.5 text-xs"
@@ -107,15 +106,16 @@ function PaymentRow({ payment: p }: { payment: Payment }) {
         >
           <Receipt size={14} /> Receipt
         </button>
-        {p.invoice_url ? (
-          <a
-            href={p.invoice_url}
-            target="_blank"
-            rel="noreferrer"
+        {p.invoice_no || p.invoice_url ? (
+          <button
+            type="button"
             className="btn-ghost py-1.5 text-xs"
+            onClick={() =>
+              downloadExport(`/payments/invoice/${p.id}`, {}, `${p.invoice_no ?? p.id}.pdf`)
+            }
           >
             <Download size={14} /> {p.invoice_no ?? 'Invoice'}
-          </a>
+          </button>
         ) : (
           <span className="text-xs text-slate-400">No invoice</span>
         )}

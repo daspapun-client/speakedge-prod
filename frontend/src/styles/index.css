@@ -874,6 +874,9 @@ body {
 .result-sheet {
   position: relative;
   container-type: inline-size;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   aspect-ratio: 3 / 2;
   background-repeat: no-repeat;
   background-position: center;
