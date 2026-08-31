@@ -313,6 +313,14 @@ function OrdersSection() {
               >
                 Track
               </Link>
+              {/* The order receipt is public and phone-checked, so it is a plain
+                  link rather than an authenticated blob download. */}
+              <a
+                href={`/api/v1/books/receipt/${encodeURIComponent(o.order_number)}?phone=${encodeURIComponent(o.phone)}`}
+                className="btn-ghost py-1.5 text-xs"
+              >
+                <Receipt size={14} /> Receipt
+              </a>
             </div>
           </div>
         ))}

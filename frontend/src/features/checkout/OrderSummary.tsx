@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Check, ShoppingBag, Truck } from 'lucide-react';
 import { planBenefits } from '@/lib/membership';
@@ -45,6 +46,15 @@ export interface OrderSummaryProps {
 }
 
 const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
+
+function OrderBookCover({ src, alt }: { src?: string | null; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (src && !failed) {
+    return <img src={src} alt={alt} className="h-full w-full object-cover" onError={() => setFailed(true)} />;
+  }
+  return <BookOpen size={26} className="text-slate-300" />;
+}
 // Offers are quoted to the buyer in their own timezone — the API sends an
 // explicit UTC instant, so this is a plain local format, never a manual shift.
 const offerDeadline = (iso: string) =>
@@ -178,11 +188,7 @@ export function OrderSummary({
         {book && (
           <div className="flex gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
             <div className="flex h-24 w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200/60">
-              {book.cover_image_url ? (
-                <img src={book.cover_image_url} alt={book.name} className="h-full w-full object-cover" />
-              ) : (
-                <BookOpen size={26} className="text-slate-300" />
-              )}
+              <OrderBookCover src={book.cover_image_url} alt={book.name} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">

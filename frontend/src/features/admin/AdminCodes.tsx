@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, Trash2, Unlock, UserPlus } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api, unwrap } from '@/lib/api';
 import {
   ACTIVATION_CONSENTS,
@@ -32,6 +32,12 @@ interface Stats {
   activated: number;
   blocked: number;
   activation_percentage: number;
+}
+
+interface ImportResult {
+  imported: number;
+  existing: string[];
+  invalid: { code: string; reason: string }[];
 }
 
 const codeBadgeClass = (status: string) =>
@@ -266,6 +272,8 @@ export function AdminCodes() {
   const [statusFilter, setStatusFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [enrollTarget, setEnrollTarget] = useState<Code | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['codes'],
@@ -278,13 +286,26 @@ export function AdminCodes() {
     queryFn: () => unwrap<Stats>(api.get('/activation-codes/stats')),
   });
 
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['codes'] }); qc.invalidateQueries({ queryKey: ['code-stats'] }); };
+
   const gen = useMutation({
     mutationFn: () =>
       unwrap<{ generated: number }>(api.post('/activation-codes/generate', { count, audience })),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['codes'] }); qc.invalidateQueries({ queryKey: ['code-stats'] }); },
+    onSuccess: refresh,
   });
 
-  const refresh = () => { qc.invalidateQueries({ queryKey: ['codes'] }); qc.invalidateQueries({ queryKey: ['code-stats'] }); };
+  const imp = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return unwrap<ImportResult>(api.post('/activation-codes/import', fd));
+    },
+    onSuccess: (data) => {
+      refresh();
+      setImportResult(data);
+      if (importRef.current) importRef.current.value = '';
+    },
+  });
 
   const setStatus = useMutation({
     mutationFn: ({ code, status }: { code: string; status: string }) => {
@@ -516,7 +537,26 @@ export function AdminCodes() {
         <button className="btn-ghost" onClick={() => downloadExport('/activation-codes/export', { format: 'xlsx' }, 'activation_codes.xlsx')}>
           Export Excel
         </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) imp.mutate(f);
+          }}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={imp.isPending}
+          onClick={() => importRef.current?.click()}
+        >
+          {imp.isPending ? 'Importing…' : 'Import Excel'}
+        </button>
         {gen.isSuccess && <span className="text-sm text-green-600">Generated {gen.data.generated} codes ✓</span>}
+        {imp.isError && <span className="text-sm text-red-600">{imp.error.message}</span>}
       </div>
 
       <DataTable
@@ -563,6 +603,45 @@ export function AdminCodes() {
       />
       {enrollTarget && (
         <ManualEnrollModal code={enrollTarget} onClose={() => setEnrollTarget(null)} onDone={refresh} />
+      )}
+      {importResult && (
+        <Modal onClose={() => setImportResult(null)}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold">Import complete</h2>
+            <button type="button" className="btn-ghost py-1 text-xs" onClick={() => setImportResult(null)}>
+              Close
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-slate-600">
+            Imported <span className="font-semibold text-green-700">{importResult.imported}</span> new codes.
+          </p>
+          {importResult.existing.length > 0 && (
+            <div className="mt-3">
+              <p className="text-sm font-medium text-amber-800">
+                {importResult.existing.length} already in the system (not overwritten)
+              </p>
+              <ul className="mt-1 max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 p-2 font-mono text-xs text-amber-900">
+                {importResult.existing.map((c, i) => (
+                  <li key={`${c}-${i}`}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {importResult.invalid.length > 0 && (
+            <div className="mt-3">
+              <p className="text-sm font-medium text-red-700">
+                {importResult.invalid.length} invalid row{importResult.invalid.length === 1 ? '' : 's'}
+              </p>
+              <ul className="mt-1 max-h-32 overflow-auto rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                {importResult.invalid.map((row, i) => (
+                  <li key={`${row.code}-${i}`}>
+                    <span className="font-mono">{row.code || '(empty)'}</span> — {row.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

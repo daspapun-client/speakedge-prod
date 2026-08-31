@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { Download } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { resumeBookPayment } from '@/features/shop/bookCheckout';
 
@@ -110,6 +111,17 @@ export function TrackPage() {
             <span className="badge bg-brand/10 text-brand">{data.status}</span>
           </div>
           <div className="text-sm text-slate-500">Delivery: {data.delivery_type}</div>
+
+          {/* The receipt is phone-checked server-side, so it is only offered
+              once the buyer has proved the order is theirs. */}
+          {data.buyer_name && (
+            <a
+              href={`/api/v1/books/receipt/${encodeURIComponent(data.order_number)}?phone=${encodeURIComponent(phone.trim())}`}
+              className="btn-ghost inline-flex items-center gap-2"
+            >
+              <Download size={16} /> Download PDF Receipt
+            </a>
+          )}
 
           {data.can_resume && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">

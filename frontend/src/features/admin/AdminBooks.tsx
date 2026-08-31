@@ -815,14 +815,6 @@ function ProductFormModal({
             </div>
           )}
           <div>
-            <label className="label">Version</label>
-            <select className="input" value={form.version} onChange={(e) => set('version', e.target.value as ProductFormState['version'])}>
-              {BOOK_VERSIONS.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </div>
-          <div>
             <label className="label">Status</label>
             <select className="input" value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'inactive')}>
               <option value="active">Active</option>

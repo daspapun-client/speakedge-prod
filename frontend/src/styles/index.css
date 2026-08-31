@@ -525,7 +525,7 @@ body {
     12px 24px 40px rgba(8, 18, 40, 0.34);
 }
 
-.book-3d-cover img {
+.book-3d-cover > img {
   display: block;
   width: 100%;
   height: 100%;
@@ -680,6 +680,8 @@ body {
 }
 
 .book-3d-spine span {
+  max-height: 72%;
+  overflow: hidden;
   color: #f3e0a0;
   font-size: 0.38rem;
   font-weight: 800;
@@ -862,6 +864,25 @@ body {
   }
   .book-3d:hover .book-3d-scene {
     transform: var(--book-rest);
+  }
+}
+
+/* Product gallery — same hardcover, sized for the PDP frame (beats the
+   homepage 22rem breakpoint via higher specificity). */
+.book-3d.book-3d-gallery {
+  --book-w: 13rem;
+  --book-h: 17.4rem;
+  --book-d: 3.1rem;
+  --book-board: 6px;
+  margin-inline: auto;
+}
+
+@media (min-width: 640px) {
+  .book-3d.book-3d-gallery {
+    --book-w: 16rem;
+    --book-h: 21.4rem;
+    --book-d: 3.6rem;
+    --book-board: 7px;
   }
 }
 

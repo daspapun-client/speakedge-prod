@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, BookOpen, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
+import iconUrl from '@/asset/logo-icon.png';
 
 interface Book {
   id: string;
@@ -22,6 +24,44 @@ const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
 
 const versionLabel = (v: string) =>
   v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+function ShopCover({ src, alt, dimmed }: { src?: string | null; alt: string; dimmed?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (src && !failed) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className={`h-full w-full object-cover transition duration-700 ease-out group-hover:scale-[1.04] ${
+          dimmed ? 'opacity-45 grayscale-[30%]' : ''
+        }`}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <div className="relative flex h-full flex-col bg-[#071a36] px-5 py-6">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.3] [background-image:radial-gradient(rgba(56,189,248,0.45)_1px,transparent_1px)] [background-size:14px_14px]"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_40%_at_50%_-5%,rgba(47,128,237,0.4),transparent_55%)]"
+      />
+      <img src={iconUrl} alt="" className="relative h-9 w-9 rounded-lg bg-white p-0.5 shadow-sm" />
+      <p className={`relative mt-auto line-clamp-4 text-lg font-extrabold leading-snug tracking-tight text-white ${dimmed ? 'opacity-50' : ''}`}>
+        {alt}
+      </p>
+      <div className="relative mt-4 h-px w-8 bg-brand-gold/80" />
+      <p className="relative mt-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/50">
+        Sujyoti Publications
+      </p>
+    </div>
+  );
+}
 
 function BookCardSkeleton() {
   return (
@@ -86,20 +126,7 @@ export function ShopPage() {
                     Book — only the purchase action differs (see below). */}
                 <Link to={`/shop/product/${b.id}`} className="flex flex-1 flex-col">
                 <div className="relative aspect-[4/5] overflow-hidden bg-gradient-to-br from-slate-100 to-slate-50">
-                  {b.cover_image_url ? (
-                    <img
-                      src={b.cover_image_url}
-                      alt={b.name}
-                      loading="lazy"
-                      className={`h-full w-full object-cover transition duration-700 ease-out group-hover:scale-[1.04] ${
-                        b.in_stock ? '' : 'opacity-45 grayscale-[30%]'
-                      }`}
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand/8 via-white to-brand-gold/10">
-                      <BookOpen size={48} className="text-brand/25" strokeWidth={1.5} />
-                    </div>
-                  )}
+                  <ShopCover src={b.cover_image_url} alt={b.name} dimmed={!b.in_stock} />
 
                   <div
                     aria-hidden

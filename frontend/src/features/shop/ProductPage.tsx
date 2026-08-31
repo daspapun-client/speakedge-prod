@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BookOpen, Building2, CheckCircle2, Home, Languages, Package, ShoppingBag, Truck,
+  ArrowLeft, BookOpen, Building2, CheckCircle2, Download, Home, Languages, Package,
+  ShoppingBag, Truck,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { TermsAgreement } from '@/components/TermsAgreement';
 import { bookCheckout, type CheckoutResult } from '@/features/shop/bookCheckout';
+import bookCoverUrl from '@/asset/speakedge-book-cover.png';
+import iconUrl from '@/asset/logo-icon.png';
 
 interface Product {
   id: string;
@@ -29,6 +32,77 @@ const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
 
 const versionLabel = (v: string) =>
   v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+function ProductBookFallback({
+  name,
+  version,
+  language,
+  speakedge,
+}: {
+  name: string;
+  version: string;
+  language: string;
+  speakedge: boolean;
+}) {
+  return (
+    <div className="book-3d book-3d-gallery" aria-hidden>
+      <div className="book-3d-ambient" />
+      <div className="book-3d-glow" />
+      <div className="book-3d-scene">
+        <div className="book-3d-cover">
+          {speakedge ? (
+            <img src={bookCoverUrl} alt="" draggable={false} />
+          ) : (
+            <div className="relative flex h-full w-full flex-col bg-[#071a36]">
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 opacity-[0.35] [background-image:radial-gradient(rgba(56,189,248,0.45)_1px,transparent_1px)] [background-size:16px_16px]"
+              />
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_45%_at_50%_-8%,rgba(47,128,237,0.45),transparent_58%)]"
+              />
+              <div className="relative flex h-full flex-col px-5 py-6 sm:px-6 sm:py-7">
+                <img
+                  src={iconUrl}
+                  alt=""
+                  className="h-9 w-9 rounded-lg bg-white p-0.5 shadow-sm ring-1 ring-white/20 sm:h-11 sm:w-11"
+                />
+                <p className="mt-7 text-[9px] font-semibold uppercase tracking-[0.22em] text-brand-gold sm:mt-9 sm:text-[10px]">
+                  {versionLabel(version)}
+                </p>
+                <p className="mt-1.5 line-clamp-4 text-[1.15rem] font-extrabold leading-snug tracking-tight text-white sm:text-2xl">
+                  {name}
+                </p>
+                <p className="mt-2 text-[10px] font-medium uppercase tracking-[0.16em] text-sky-200/70 sm:text-[11px]">
+                  {language}
+                </p>
+                <div className="mt-auto">
+                  <div className="mb-3 h-px w-10 bg-gradient-to-r from-brand-gold to-transparent" />
+                  <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/55 sm:text-[10px]">
+                    Sujyoti Publications
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="book-3d-cover-shine" />
+        </div>
+        <div className="book-3d-cover-lip" />
+        <div className="book-3d-spine">
+          <span>{name}</span>
+        </div>
+        <div className="book-3d-pages" />
+        <div className="book-3d-fore" />
+        <div className="book-3d-top" />
+        <div className="book-3d-bottom" />
+        <div className="book-3d-back" />
+      </div>
+      <div className="book-3d-platform" />
+      <div className="book-3d-shadow" />
+    </div>
+  );
+}
 
 function ProductSkeleton() {
   return (
@@ -97,14 +171,27 @@ export function ProductPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<CheckoutResult | null>(null);
+  // Kept for the receipt link on the confirmation screen — the buyer is a guest,
+  // so the phone is what proves the order is theirs.
+  const [phone, setPhone] = useState('');
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [activeImage, setActiveImage] = useState(0);
+  const [broken, setBroken] = useState<Set<string>>(() => new Set());
   const allImages = useMemo(
-    () => [...new Set([p?.cover_image_url, ...(p?.gallery ?? [])].filter(Boolean) as string[])],
-    [p?.cover_image_url, p?.gallery],
+    () =>
+      [...new Set([p?.cover_image_url, ...(p?.gallery ?? [])].filter(Boolean) as string[])].filter(
+        (url) => !broken.has(url),
+      ),
+    [p?.cover_image_url, p?.gallery, broken],
   );
 
-  useEffect(() => setActiveImage(0), [id]);
+  useEffect(() => {
+    setActiveImage(0);
+    setBroken(new Set());
+  }, [id]);
+
+  const markBroken = (url: string) =>
+    setBroken((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -131,6 +218,7 @@ export function ProductPage() {
         accept_terms: acceptTerms,
       });
       setResult(res);
+      setPhone(f.get('phone') as string);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setError((err as Error).message);
@@ -185,9 +273,17 @@ export function ProductPage() {
                   : 'Your order is confirmed. Track it below for dispatch and courier updates.'
                 : 'Your order was saved but is not paid for yet. Finish the payment from the tracking page below to confirm it.'}
             </p>
-            <Link to={`/track?order=${result.order_number}`} className="btn-primary mt-4 inline-flex w-full sm:w-auto">
-              Track this order
-            </Link>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Link to={`/track?order=${result.order_number}`} className="btn-primary inline-flex">
+                Track this order
+              </Link>
+              <a
+                href={`/api/v1/books/receipt/${encodeURIComponent(result.order_number)}?phone=${encodeURIComponent(phone)}`}
+                className="btn-ghost inline-flex items-center gap-2"
+              >
+                <Download size={16} /> Download PDF Receipt
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -197,7 +293,8 @@ export function ProductPage() {
   const outOfStock = p.available <= 0;
   const onSale = p.offer_price != null && p.offer_price < p.price;
   const discountPct = onSale ? Math.round((1 - p.sell_price / p.price) * 100) : 0;
-  const shownImage = allImages[activeImage] ?? allImages[0];
+  const shownIndex = allImages.length ? Math.min(activeImage, allImages.length - 1) : 0;
+  const shownImage = allImages[shownIndex];
   const description = p.description?.trim();
 
   return (
@@ -214,7 +311,7 @@ export function ProductPage() {
         <section className="min-w-0 space-y-5 sm:space-y-6">
           {/* Gallery */}
           <div className="group/gallery overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-100/80">
-            <div className="relative isolate overflow-hidden">
+            <div className="relative isolate overflow-visible">
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_-10%,rgba(47,128,237,0.12),transparent_55%)]"
@@ -228,7 +325,7 @@ export function ProductPage() {
                 className="pointer-events-none absolute inset-0 opacity-[0.4] [background-image:radial-gradient(rgba(148,163,184,0.35)_1px,transparent_1px)] [background-size:20px_20px]"
               />
 
-              <div className="relative flex min-h-[300px] items-center justify-center px-6 py-10 sm:min-h-[420px] sm:px-10 sm:py-12">
+              <div className="relative flex min-h-[300px] items-center justify-center px-8 py-12 sm:min-h-[420px] sm:px-12 sm:py-14">
                 <div className="relative w-full max-w-sm sm:max-w-md">
                   {shownImage ? (
                     <>
@@ -242,13 +339,16 @@ export function ProductPage() {
                         className={`relative z-10 mx-auto max-h-[min(520px,68vh)] w-full object-contain drop-shadow-[0_24px_48px_rgba(15,23,42,0.18)] transition duration-700 ease-out group-hover/gallery:scale-[1.02] ${
                           outOfStock ? 'opacity-50 grayscale-[25%]' : ''
                         }`}
+                        onError={() => markBroken(shownImage)}
                       />
                     </>
                   ) : (
-                    <div className="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/60 bg-gradient-to-br from-brand/10 via-white to-brand-gold/15 shadow-inner">
-                      <div aria-hidden className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(47,128,237,0.15),transparent_50%)]" />
-                      <BookOpen size={72} className="relative text-brand/30" strokeWidth={1.25} />
-                    </div>
+                    <ProductBookFallback
+                      name={p.name}
+                      version={p.version}
+                      language={p.language}
+                      speakedge={p.is_speakedge_book}
+                    />
                   )}
                 </div>
 
@@ -266,7 +366,7 @@ export function ProductPage() {
 
                 {allImages.length > 1 && (
                   <span className="absolute bottom-5 right-5 z-20 rounded-full border border-white/20 bg-slate-900/55 px-3 py-1 text-[11px] font-medium tabular-nums text-white backdrop-blur-md">
-                    {activeImage + 1} / {allImages.length}
+                    {shownIndex + 1} / {allImages.length}
                   </span>
                 )}
 
@@ -286,14 +386,19 @@ export function ProductPage() {
                     type="button"
                     onClick={() => setActiveImage(i)}
                     aria-label={`View image ${i + 1}`}
-                    aria-pressed={i === activeImage}
+                    aria-pressed={i === shownIndex}
                     className={`snap-start shrink-0 overflow-hidden rounded-xl border-2 bg-white p-1 transition duration-200 ${
-                      i === activeImage
+                      i === shownIndex
                         ? 'border-brand shadow-[0_4px_12px_rgba(47,128,237,0.2)] ring-2 ring-brand/20'
                         : 'border-transparent opacity-70 hover:border-slate-300 hover:opacity-100'
                     }`}
                   >
-                    <img src={url} alt="" className="h-16 w-14 object-contain sm:h-[4.5rem] sm:w-[4rem]" />
+                    <img
+                      src={url}
+                      alt=""
+                      className="h-16 w-14 object-contain sm:h-[4.5rem] sm:w-[4rem]"
+                      onError={() => markBroken(url)}
+                    />
                   </button>
                 ))}
               </div>
@@ -325,6 +430,11 @@ export function ProductPage() {
               <span className="text-3xl font-bold tabular-nums tracking-tight text-slate-900 sm:text-4xl">
                 {rupees(p.sell_price)}
               </span>
+              {p.gst_rate > 0 && (
+                <span className="pb-1 text-base font-medium text-slate-500 sm:text-lg">
+                  + {p.gst_rate}% GST
+                </span>
+              )}
               {onSale && (
                 <>
                   <span className="pb-1 text-lg tabular-nums text-slate-400 line-through">
@@ -334,11 +444,6 @@ export function ProductPage() {
                     Save {rupees(p.price - p.sell_price)}
                   </span>
                 </>
-              )}
-              {p.gst_rate > 0 && (
-                <p className="w-full text-xs text-slate-500">
-                  Inclusive of {p.gst_rate}% GST where applicable
-                </p>
               )}
             </div>
 

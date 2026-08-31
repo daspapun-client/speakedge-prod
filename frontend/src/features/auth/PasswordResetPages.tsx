@@ -3,17 +3,18 @@ import type { ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock, MailCheck, User,
+  AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
+import { CONTACT_PHONE, WHATSAPP_URL } from '@/lib/site';
 
 /** Shared shell so both steps of the flow read as one screen. */
 function AuthCard({ icon: Icon, title, subtitle, children }: {
   icon: LucideIcon;
   title: string;
-  subtitle: string;
-  children: ReactNode;
+  subtitle?: string;
+  children?: ReactNode;
 }) {
   return (
     <div className="mx-auto max-w-md py-8 sm:py-12">
@@ -24,7 +25,7 @@ function AuthCard({ icon: Icon, title, subtitle, children }: {
           </span>
           <div>
             <h1 className="text-xl font-bold text-slate-900">{title}</h1>
-            <p className="text-sm text-slate-500">{subtitle}</p>
+            {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
           </div>
         </div>
         {children}
@@ -47,77 +48,22 @@ function ErrorNote({ children }: { children: ReactNode }) {
   );
 }
 
-/** Step 1 — ask for the reset link. */
+/** Step 1 — WhatsApp support (self-serve email reset is no longer offered here). */
 export function ForgotPasswordPage() {
-  const { register, handleSubmit } = useForm<{ username: string }>();
-  const [sent, setSent] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  async function onSubmit(v: { username: string }) {
-    setError('');
-    setLoading(true);
-    try {
-      await unwrap(api.post('/auth/forgot-password', { username: v.username.trim() }));
-      setSent(v.username.trim());
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  if (sent) {
-    return (
-      <AuthCard icon={MailCheck} title="Check your email" subtitle="We have sent you a reset link">
-        <div className="space-y-4 text-sm leading-relaxed text-slate-600">
-          <p>
-            If an account matches <b className="text-slate-900">{sent}</b>, a password reset link is on its way
-            to its registered email address. The link is valid for one hour and can be used once.
-          </p>
-          <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs">
-            No email arriving? Check your spam folder. If your account has no email address on file, contact
-            SpeakEdge support and we will reset it for you.
-          </p>
-          <button type="button" className="btn-ghost w-full" onClick={() => setSent('')}>
-            Try a different Student ID or email
-          </button>
-        </div>
-      </AuthCard>
-    );
-  }
-
   return (
-    <AuthCard icon={KeyRound} title="Forgot your password?" subtitle="We will email you a link to set a new one">
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div>
-          <label className="label" htmlFor="username">Student ID / Email / Username</label>
-          <div className="relative">
-            <User size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              id="username"
-              className="input bg-slate-50 pl-10 focus:bg-white"
-              placeholder="SPK-26-XXXXXX or you@email.com"
-              autoComplete="username"
-              autoFocus
-              {...register('username', { required: true })}
-            />
-          </div>
-          <p className="mt-1.5 text-xs text-slate-400">
-            Students, teachers, partners, examiners and admins all reset the same way.
-          </p>
-        </div>
-
-        {error && <ErrorNote>{error}</ErrorNote>}
-
-        <button type="submit" className="btn-primary w-full py-2.5" disabled={loading}>
-          {loading ? (
-            <><Loader2 size={16} className="animate-spin" /> Sending…</>
-          ) : (
-            <>Send reset link <ArrowRight size={16} /></>
-          )}
-        </button>
-      </form>
+    <AuthCard icon={KeyRound} title="Forgot your password?">
+      <p className="text-sm leading-relaxed text-slate-600">
+        WhatsApp{' '}
+        <a
+          href={WHATSAPP_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="font-semibold text-brand hover:underline"
+        >
+          {CONTACT_PHONE.replace(/ /g, '')}
+        </a>{' '}
+        with your Student ID / Email / Username to receive support within 48 hours.
+      </p>
     </AuthCard>
   );
 }
@@ -159,9 +105,9 @@ export function ResetPasswordPage() {
     return (
       <AuthCard icon={KeyRound} title="Reset link missing" subtitle="This page needs a valid reset link">
         <div className="space-y-4">
-          <ErrorNote>That link is incomplete. Request a new one and open it from your email.</ErrorNote>
+          <ErrorNote>That link is incomplete. Contact support with your Student ID, email or username.</ErrorNote>
           <Link to="/forgot-password" className="btn-primary w-full py-2.5">
-            Request a new link <ArrowRight size={16} />
+            Contact support <ArrowRight size={16} />
           </Link>
         </div>
       </AuthCard>
