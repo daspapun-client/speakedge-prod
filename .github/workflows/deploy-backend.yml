@@ -1,0 +1,213 @@
+name: Deploy Backend to ECS
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'ECR image tag, for example latest or sha-<git-sha>'
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-backend-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: 481609031842.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: sujyoti-edtech-backend-prod
+  ECS_CLUSTER: Sujyoti-EdTech-PROD-cluster
+  ECS_SERVICE: sujyoti-edtech-backend-service
+  TASK_DEFINITION_FAMILY: sujyoti-edtech-backend
+  CONTAINER_NAME: backend-app
+  IAM_ROLE: arn:aws:iam::481609031842:role/Terraform-deployer-role
+
+jobs:
+  deploy:
+    name: Deploy backend image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE }}
+          role-session-name: github-actions-backend-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image and register task definition
+        id: deploy
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_TAG" =~ ^(latest|sha-[0-9a-f]{7,40})$ ]]; then
+            echo "Unsupported image tag: $IMAGE_TAG"
+            exit 1
+          fi
+
+          new_digest=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          if [[ -z "$new_digest" || "$new_digest" == "None" ]]; then
+            echo "Image tag was not found in ECR: $IMAGE_TAG"
+            exit 1
+          fi
+          new_image="$ECR_REGISTRY/$ECR_REPOSITORY@$new_digest"
+
+          service_json=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --output json)
+          current_task_definition=$(jq -r '.services[0].taskDefinition' <<< "$service_json")
+          target_group_arn=$(jq -r '.services[0].loadBalancers[0].targetGroupArn // empty' <<< "$service_json")
+          if [[ -z "$current_task_definition" || "$current_task_definition" == "null" ]]; then
+            echo "Unable to determine the current backend task definition"
+            exit 1
+          fi
+
+          current_image=$(aws ecs describe-task-definition \
+            --task-definition "$current_task_definition" \
+            --query "taskDefinition.containerDefinitions[?name=='$CONTAINER_NAME'].image | [0]" \
+            --output text)
+          if [[ -z "$current_image" || "$current_image" == "None" ]]; then
+            echo "Unable to determine the current backend image"
+            exit 1
+          fi
+
+          previous_image_tag=""
+          if [[ "$current_image" == *@sha256:* ]]; then
+            current_digest="${current_image##*@}"
+            previous_image_tag=$(aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageDigest="$current_digest" \
+              --query 'imageDetails[0].imageTags' \
+              --output json | jq -r '.[]? | select(startswith("sha-"))' | head -n 1 || true)
+          else
+            previous_image_tag="${current_image##*:}"
+          fi
+          [[ -z "$previous_image_tag" ]] && previous_image_tag="digest:${current_image##*@}"
+
+          aws ecs describe-task-definition \
+            --task-definition "$current_task_definition" \
+            --query 'taskDefinition' > current-task-definition.json
+          jq --arg image "$new_image" --arg name "$CONTAINER_NAME" '
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+            | .containerDefinitions |= map(if .name == $name then .image = $image else . end)
+          ' current-task-definition.json > next-task-definition.json
+
+          new_task_definition=$(aws ecs register-task-definition \
+            --cli-input-json file://next-task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$new_task_definition" \
+            --force-new-deployment \
+            --output json > update-service.json
+
+          jq -n \
+            --arg service "$ECS_SERVICE" \
+            --arg previousTaskDefinition "$current_task_definition" \
+            --arg previousImageTag "$previous_image_tag" \
+            --arg previousImage "$current_image" \
+            --arg newTaskDefinition "$new_task_definition" \
+            --arg requestedImageTag "$IMAGE_TAG" \
+            --arg resolvedImage "$new_image" \
+            '{service:$service, previousTaskDefinition:$previousTaskDefinition, previousImageTag:$previousImageTag, previousImage:$previousImage, newTaskDefinition:$newTaskDefinition, requestedImageTag:$requestedImageTag, resolvedImage:$resolvedImage}' \
+            > deployment-state.json
+
+          echo "previous_task_definition=$current_task_definition" >> "$GITHUB_OUTPUT"
+          echo "previous_image_tag=$previous_image_tag" >> "$GITHUB_OUTPUT"
+          echo "new_task_definition=$new_task_definition" >> "$GITHUB_OUTPUT"
+          echo "target_group_arn=$target_group_arn" >> "$GITHUB_OUTPUT"
+          echo "### Backend deployment started" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Requested image tag: $IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Resolved image: $new_image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Previous task definition: $current_task_definition" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Previous SHA tag: $previous_image_tag" >> "$GITHUB_STEP_SUMMARY"
+          echo "- New task definition: $new_task_definition" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify ECS deployment and target health
+        id: verify
+        continue-on-error: true
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+          NEW_TASK_DEFINITION: ${{ steps.deploy.outputs.new_task_definition }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            service_json=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE" \
+              --output json)
+            desired=$(jq -r '.services[0].desiredCount' <<< "$service_json")
+            running=$(jq -r '.services[0].runningCount' <<< "$service_json")
+            pending=$(jq -r '.services[0].pendingCount' <<< "$service_json")
+            primary=$(jq -r '.services[0].deployments[] | select(.status == "PRIMARY") | .taskDefinition' <<< "$service_json" | head -n 1)
+
+            healthy=0
+            if [[ -n "$TARGET_GROUP_ARN" ]]; then
+              healthy=$(aws elbv2 describe-target-health \
+                --target-group-arn "$TARGET_GROUP_ARN" \
+                --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`] | length(@)' \
+                --output text)
+            fi
+
+            echo "Attempt $attempt/30: desired=$desired running=$running pending=$pending healthy_targets=$healthy primary=$primary"
+            if [[ "$desired" -gt 0 && "$running" -eq "$desired" && "$pending" -eq 0 && "$primary" == "$NEW_TASK_DEFINITION" ]]; then
+              if [[ -z "$TARGET_GROUP_ARN" || "$healthy" -ge "$desired" ]]; then
+                aws ecs wait services-stable \
+                  --cluster "$ECS_CLUSTER" \
+                  --services "$ECS_SERVICE"
+                echo "Backend deployment is stable and healthy."
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo "Backend deployment did not become healthy within 10 minutes."
+          exit 1
+
+      - name: Roll back backend deployment
+        if: always() && steps.deploy.outputs.previous_task_definition != '' && (steps.deploy.outcome == 'failure' || steps.verify.outcome == 'failure')
+        env:
+          PREVIOUS_TASK_DEFINITION: ${{ steps.deploy.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE_TAG: ${{ steps.deploy.outputs.previous_image_tag }}
+        run: |
+          set -euo pipefail
+          echo "Rolling back to $PREVIOUS_TASK_DEFINITION ($PREVIOUS_IMAGE_TAG)"
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$PREVIOUS_TASK_DEFINITION" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+          echo "Backend rollback completed."
+          echo "### Backend deployment rolled back" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Restored task definition: $PREVIOUS_TASK_DEFINITION" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Restored SHA tag: $PREVIOUS_IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-deployment-state-${{ github.run_id }}
+          path: deployment-state.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail after rollback
+        if: steps.verify.outcome == 'failure'
+        run: exit 1
