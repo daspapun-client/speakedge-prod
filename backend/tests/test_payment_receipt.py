@@ -125,8 +125,9 @@ async def test_monthly_receipt_prints_student_id_and_no_delivery(client, rendere
     student = await _student_headers(client)
     await client.get("/api/v1/payments/plans")
 
+    paid_at = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
     payment = Payment(student_id=STUDENT, kind="monthly", plan="Silver", amount=34900,
-                      due_month="2026-08", status=PaymentStatus.paid,
+                      due_month="2026-08", status=PaymentStatus.paid, paid_at=paid_at,
                       razorpay_order_id="order_test_monthly", razorpay_payment_id="pay_test_m1")
     await payment.insert()
 
