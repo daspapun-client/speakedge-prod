@@ -18,7 +18,7 @@ from app.core.rbac import (
 )
 from app.shared import batch_enrolment as enrol
 from app.shared.access import require_unlocked_teacher_student
-from app.core.security import Role, decode_token
+from app.core.security import MIN_PASSWORD_LENGTH, Role, decode_token
 from app.db.base import utcnow
 from app.db.models import (
     ActivityLog,
@@ -173,8 +173,8 @@ async def apply(body: TeacherApplication):
     username = body.username.strip()
     if len(username) < 3:
         raise ValidationAppError("Username must be at least 3 characters")
-    if len(body.password) < 6:
-        raise ValidationAppError("Password must be at least 6 characters")
+    if len(body.password) < MIN_PASSWORD_LENGTH:
+        raise ValidationAppError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     if await User.find_one(User.username == username):
         raise ConflictError("That username is already taken. Please choose another.")
 

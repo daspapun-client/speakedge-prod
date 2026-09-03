@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
+import { MIN_PASSWORD_LENGTH } from '@/lib/auth';
 
 /** Every allowlist and age rule the registration form needs, served by
  *  GET /membership/form-options. Nothing here is duplicated in the frontend —
@@ -280,8 +281,8 @@ export function ActivatePage() {
         </div>
         <div>
           <label className="label">Create Password *</label>
-          <input name="password" type="password" className="input" minLength={6} required />
-          <p className="mt-1 text-xs text-slate-500">Minimum 6 characters</p>
+          <input name="password" type="password" className="input" minLength={MIN_PASSWORD_LENGTH} required />
+          <p className="mt-1 text-xs text-slate-500">Minimum {MIN_PASSWORD_LENGTH} characters</p>
         </div>
         <div className="md:col-span-2">
           <label className="label">Date of Birth *</label>

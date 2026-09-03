@@ -2,6 +2,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.core.security import MIN_PASSWORD_LENGTH
+
 
 class LoginRequest(BaseModel):
     username: str  # email or student_id
@@ -22,7 +24,7 @@ class RefreshRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     old_password: str
-    new_password: str
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -31,7 +33,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
 
 
 class MeOut(BaseModel):

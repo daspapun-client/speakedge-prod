@@ -7,6 +7,7 @@ import {
   ArrowRight, Sparkles, type LucideIcon,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
+import { MIN_PASSWORD_LENGTH } from '@/lib/auth';
 import {
   pushPermission, pushSupported, subscribePush, unsubscribePush,
 } from '@/lib/pushNotifications';
@@ -153,8 +154,8 @@ export function SettingsPage() {
                 type="password"
                 className="input"
                 autoComplete="new-password"
-                placeholder="Minimum 6 characters"
-                {...register('new_password', { required: true, minLength: 6 })}
+                placeholder={`Minimum ${MIN_PASSWORD_LENGTH} characters`}
+                {...register('new_password', { required: true, minLength: MIN_PASSWORD_LENGTH })}
               />
             </div>
             <div>
@@ -180,7 +181,7 @@ export function SettingsPage() {
                   {mismatch
                     ? 'New password and confirmation do not match'
                     : formState.errors.new_password
-                      ? 'Password must be at least 6 characters'
+                      ? `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
                       : (change.error as Error).message}
                 </>
               )}

@@ -8,6 +8,7 @@ from app.core.envelope import ok
 from app.core.exceptions import ConflictError, ValidationAppError
 from app.core.rbac import CurrentUser, require_admin, require_student
 from app.core.ratelimit import rate_limit
+from app.core.security import MIN_PASSWORD_LENGTH
 from app.db.base import utcnow
 from app.db.models import ActivationCode, PromptAudience, Subscription
 from app.modules.membership import service
@@ -195,7 +196,7 @@ async def activate(
     state: str = Form(...),
     district: str = Form(...),
     pin_code: str = Form(...),
-    password: str = Form(..., min_length=6),
+    password: str = Form(..., min_length=MIN_PASSWORD_LENGTH),
     # Academic / educational background + the document that evidences it
     education_level: str = Form(...),
     # Optional fields

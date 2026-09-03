@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.core.envelope import ok
 from app.core.exceptions import ValidationAppError
 from app.core.rbac import CurrentUser, require_admin
+from app.core.security import MIN_PASSWORD_LENGTH
 from app.db.models import ActivationCode, CodeStatus, PromptAudience
 from app.modules.activation_code import service
 from app.modules.membership import service as membership_service
@@ -129,7 +130,7 @@ async def manual_activate(
     state: str = Form(...),
     district: str = Form(...),
     pin_code: str = Form(...),
-    password: str = Form(..., min_length=6),
+    password: str = Form(..., min_length=MIN_PASSWORD_LENGTH),
     education_level: str = Form(...),
     email: str | None = Form(None),
     cefr_level: str | None = Form(None),

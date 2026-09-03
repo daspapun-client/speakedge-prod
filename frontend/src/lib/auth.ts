@@ -4,6 +4,10 @@ import { persist } from 'zustand/middleware';
 
 export type Role = 'super_admin' | 'admin' | 'examiner' | 'teacher' | 'partner' | 'student';
 
+/** Shortest password the backend accepts anywhere — mirrors MIN_PASSWORD_LENGTH
+ * in backend/app/core/security.py, which is where it is actually enforced. */
+export const MIN_PASSWORD_LENGTH = 8;
+
 /** Landing route for a given role after login / when a guard bounces them. */
 export function homeFor(role: Role | null): string {
   switch (role) {

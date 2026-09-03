@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import UnauthorizedError, ValidationAppError
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -21,7 +21,18 @@ class Role(str, Enum):
     student = "student"
 
 
+# One floor for every account in the product. Enforced in hash_password rather
+# than in each schema because there are eight places a password gets set
+# (activation, staff/examiner/teacher/partner creation, the admin reset, the
+# self-service change, the emailed reset link, the seed) and a browser-side
+# rule is not a rule. Callers may still declare it on their schema for a
+# nicer field-level 422 — this is the backstop.
+MIN_PASSWORD_LENGTH = 8
+
+
 def hash_password(password: str) -> str:
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        raise ValidationAppError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     return pwd_context.hash(password)
 
 

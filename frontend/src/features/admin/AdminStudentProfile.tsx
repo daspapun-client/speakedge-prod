@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Ban, KeyRound, ShieldCheck } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
-import { ApprovePlanModal, Column, DataTable, EmailLink, Modal, StatCard, StatusBadge, StudentAvatar, PhoneLink, fmtDate, rupees, approveMembership } from './_shared';
+import { ApprovePlanModal, Column, DataTable, EmailLink, Modal, ResetPasswordModal, StatCard, StatusBadge, StudentAvatar, PhoneLink, fmtDate, rupees, approveMembership } from './_shared';
 
 interface StudentDetail {
   student_id: string;
@@ -411,60 +411,6 @@ function fmtDuration(totalSeconds: number) {
   const m = Math.floor(totalSeconds / 60);
   const s = Math.floor(totalSeconds % 60);
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
-function ResetPasswordModal({
-  studentId,
-  studentName,
-  onClose,
-  onDone,
-}: {
-  studentId: string;
-  studentName: string;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [pw, setPw] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [error, setError] = useState('');
-  const act = useMutation({
-    mutationFn: () => {
-      if (pw.length < 6) throw new Error('Password must be at least 6 characters');
-      if (pw !== confirm) throw new Error('Passwords do not match');
-      return unwrap(api.post('/admin/users/reset-password', { username: studentId, new_password: pw }));
-    },
-    onSuccess: () => { setError(''); onDone(); onClose(); },
-    onError: (e: Error) => setError(e.message),
-  });
-  return (
-    <Modal onClose={onClose}>
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">Reset password</h2>
-        <button type="button" className="btn-ghost py-1 text-xs" onClick={onClose}>Close</button>
-      </div>
-      <p className="mt-2 text-sm text-slate-500">Set a new login password for {studentName}. Share it with them directly — it is not emailed.</p>
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-      <form
-        className="mt-4 space-y-3"
-        onSubmit={(e) => { e.preventDefault(); act.mutate(); }}
-      >
-        <div>
-          <label className="label" htmlFor="reset-pw">New password</label>
-          <input id="reset-pw" className="input" type="password" autoComplete="new-password" minLength={6} value={pw} onChange={(e) => setPw(e.target.value)} />
-        </div>
-        <div>
-          <label className="label" htmlFor="reset-pw-confirm">Confirm password</label>
-          <input id="reset-pw-confirm" className="input" type="password" autoComplete="new-password" minLength={6} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-        </div>
-        <div className="flex gap-2">
-          <button type="submit" className="btn-primary" disabled={act.isPending}>
-            {act.isPending ? 'Saving…' : 'Update password'}
-          </button>
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-        </div>
-      </form>
-    </Modal>
-  );
 }
 
 export function AdminStudentProfile() {
@@ -976,8 +922,8 @@ export function AdminStudentProfile() {
       )}
       {resettingPw && (
         <ResetPasswordModal
-          studentId={studentId}
-          studentName={s.full_name}
+          username={studentId}
+          label={s.full_name}
           onClose={() => setResettingPw(false)}
           onDone={() => setPwOk('Password updated.')}
         />

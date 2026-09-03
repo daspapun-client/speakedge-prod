@@ -6,6 +6,7 @@ dies when the password changes by any other route.
 """
 import pytest
 
+from app.core.exceptions import ValidationAppError
 from app.core.security import Role, hash_password
 from app.db.models import User
 from app.modules.auth import service
@@ -123,3 +124,47 @@ async def test_garbage_and_short_passwords_are_refused(client, monkeypatch):
     assert (await client.post(
         "/api/v1/auth/reset-password", json={"token": _token_from(links[0]), "new_password": "short"}
     )).status_code == 422
+
+
+async def _admin(client):
+    await User(
+        username="admin@speakedge.in", email="admin@speakedge.in",
+        password_hash=hash_password("Admin@12345"), role=Role.super_admin,
+        full_name="Super Admin",
+    ).insert()
+    r = await client.post("/api/v1/auth/login",
+                          json={"username": "admin@speakedge.in", "password": "Admin@12345"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['data']['access_token']}"}
+
+
+async def test_admin_reset_refuses_a_short_password(client):
+    """The length floor lives on the server, not in the browser.
+
+    `/admin/users/reset-password` used to accept any string — even "" — with the
+    6-char rule enforced only by the admin UI. A truncated or mistyped password
+    got hashed anyway and locked the account out with no way to discover what
+    had been set.
+    """
+    await _make_user()
+    admin = await _admin(client)
+
+    r = await client.post("/api/v1/admin/users/reset-password", headers=admin,
+                          json={"username": "learner@speakedge.in", "new_password": "short"})
+    assert r.status_code == 422, r.text
+    # ...and the old password still works: nothing was written.
+    assert (await _login(client, "learner@speakedge.in", "Student@123")).status_code == 200
+
+    r = await client.post("/api/v1/admin/users/reset-password", headers=admin,
+                          json={"username": "learner@speakedge.in", "new_password": "Proper@Pass1"})
+    assert r.status_code == 200, r.text
+    assert (await _login(client, "learner@speakedge.in", "Proper@Pass1")).status_code == 200
+
+
+async def test_hash_password_is_the_backstop_for_every_other_path():
+    """Eight call sites set a password; the floor is enforced in the one place
+    they all go through, so a new one cannot forget it."""
+    with pytest.raises(ValidationAppError):
+        hash_password("short")
+    with pytest.raises(ValidationAppError):
+        hash_password("")

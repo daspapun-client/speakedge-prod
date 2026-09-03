@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, unwrap } from '@/lib/api';
-import { Column, DataTable, PageHeader, StatusBadge, fmtDate } from './_shared';
+import { Column, DataTable, MIN_PASSWORD_LENGTH, PageHeader, ResetPasswordModal, StatusBadge, fmtDate } from './_shared';
 import { useAuth } from '@/lib/auth';
 
 interface Staff {
@@ -22,13 +22,14 @@ export function AdminRoles() {
   const { role: myRole } = useAuth();
   const [error, setError] = useState('');
   const [form, setForm] = useState({ username: '', password: '', role: 'examiner', full_name: '', email: '' });
+  const [resetting, setResetting] = useState<Staff | null>(null);
 
   const { data, isLoading } = useQuery({ queryKey: ['admin-staff'], queryFn: () => unwrap<Staff[]>(api.get('/admin/users/staff')) });
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-staff'] });
 
   const create = useMutation({
     mutationFn: () => {
-      if (!form.username.trim() || form.password.length < 6) throw new Error('Username and a 6+ char password are required');
+      if (!form.username.trim() || form.password.length < MIN_PASSWORD_LENGTH) throw new Error(`Username and a ${MIN_PASSWORD_LENGTH}+ char password are required`);
       return unwrap(api.post('/admin/users/staff', {
         username: form.username, password: form.password, role: form.role,
         full_name: form.full_name || null, email: form.email || null,
@@ -45,16 +46,6 @@ export function AdminRoles() {
     onError: (e: Error) => setError(e.message),
   });
 
-  const resetPw = useMutation({
-    mutationFn: (username: string) => {
-      const pw = window.prompt(`New password for ${username} (min 6 chars)`);
-      if (!pw || pw.length < 6) throw new Error('Password must be at least 6 characters');
-      return unwrap(api.post('/admin/users/reset-password', { username, new_password: pw }));
-    },
-    onSuccess: () => setError(''),
-    onError: (e: Error) => setError(e.message),
-  });
-
   const roleOptions = ROLES.filter((r) => r !== 'super_admin' || myRole === 'super_admin');
 
   const columns: Column<Staff>[] = [
@@ -68,7 +59,7 @@ export function AdminRoles() {
       header: 'Actions',
       cell: (u) => (
         <div className="flex flex-wrap gap-1">
-          <button className="btn-ghost py-1 text-xs" onClick={() => resetPw.mutate(u.username)}>Reset PW</button>
+          <button className="btn-ghost py-1 text-xs" onClick={() => setResetting(u)}>Reset PW</button>
           {u.role !== 'super_admin' && (
             <button
               className={`btn-ghost py-1 text-xs ${u.is_active ? 'text-red-600' : 'text-green-700'}`}
@@ -91,7 +82,7 @@ export function AdminRoles() {
         <h2 className="text-sm font-semibold text-slate-700">Create staff account</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           <input className="input" placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          <input className="input" type="password" placeholder="Password (6+)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <input className="input" type="password" placeholder={`Password (${MIN_PASSWORD_LENGTH}+)`} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
@@ -110,6 +101,15 @@ export function AdminRoles() {
         searchPlaceholder="Search staff"
         emptyLabel="No staff accounts."
       />
+
+      {resetting && (
+        <ResetPasswordModal
+          username={resetting.username}
+          label={resetting.full_name || resetting.username}
+          onClose={() => setResetting(null)}
+          onDone={() => { setError(''); refresh(); }}
+        />
+      )}
     </div>
   );
 }

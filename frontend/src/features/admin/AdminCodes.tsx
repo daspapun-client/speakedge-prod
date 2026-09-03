@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, Trash2, Unlock, UserPlus } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { api, unwrap } from '@/lib/api';
+import { MIN_PASSWORD_LENGTH } from '@/lib/auth';
 import {
   ACTIVATION_CONSENTS,
   GuardianFields,
@@ -115,8 +116,8 @@ function ManualEnrollModal({
         </div>
         <div>
           <label className="label">Create Password *</label>
-          <input name="password" type="password" className="input" minLength={6} required />
-          <p className="mt-1 text-xs text-slate-500">Minimum 6 characters</p>
+          <input name="password" type="password" className="input" minLength={MIN_PASSWORD_LENGTH} required />
+          <p className="mt-1 text-xs text-slate-500">Minimum {MIN_PASSWORD_LENGTH} characters</p>
         </div>
         <div className="md:col-span-2">
           <label className="label">Date of Birth *</label>

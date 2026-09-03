@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.envelope import ok
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.core.rbac import CurrentUser, require_admin, require_super_admin
-from app.core.security import Role, hash_password
+from app.core.security import MIN_PASSWORD_LENGTH, Role, hash_password
 from app.db.models import (
     ActivationCode,
     ActivityLog,
@@ -630,7 +630,11 @@ async def permanent_delete(module: str, record_id: str,
 # --------------------------------------------------------------------------
 class PasswordReset(BaseModel):
     username: str
-    new_password: str
+    # Enforced on the wire, not just in the browser. This endpoint used to
+    # accept any string (even ""), so a mistyped or truncated password locked
+    # the account out silently — which is exactly how a super admin lost
+    # admin@speakedge.in. MIN_PASSWORD_LENGTH matches /auth/reset-password.
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
 
 
 @router.post("/users/reset-password")
@@ -648,7 +652,7 @@ async def reset_password(body: PasswordReset, admin: CurrentUser = Depends(requi
 
 class CreateStaff(BaseModel):
     username: str
-    password: str
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH)
     role: Role
     full_name: str | None = None
     email: str | None = None
