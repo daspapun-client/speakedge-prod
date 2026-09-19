@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Reply, Send, SmilePlus, X } from 'lucide-react';
+import { ArrowLeft, Reply, Send, SmilePlus, Video, X } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { StudentAvatar } from '@/features/admin/_shared';
 import { useDirectChat, type DirectMessage } from '@/features/dashboard/useDirectChat';
@@ -260,7 +260,7 @@ export function DirectChatPage() {
     else navigate('/dashboard/explore');
   };
 
-  const { friend, messages, online, typing, status, loadError, chatError, send, react, notifyTyping } =
+  const { friend, myMeetingUrl, messages, online, typing, status, loadError, chatError, send, react, notifyTyping } =
     useDirectChat(studentId);
 
   useEffect(() => {
@@ -321,6 +321,20 @@ export function DirectChatPage() {
               </span>
             </div>
           </Link>
+          {/* The 1:1 practice room: theirs if they shared one, otherwise yours,
+              so either partner can open the session from the thread. */}
+          {(friend?.meeting_url || myMeetingUrl) && (
+            <a
+              href={friend?.meeting_url || myMeetingUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+              title={friend?.meeting_url ? `Join ${name}'s practice room` : 'Open your practice room'}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/25 active:scale-95"
+            >
+              <Video size={16} className="shrink-0" />
+              <span className="hidden sm:inline">Practice room</span>
+            </a>
+          )}
         </div>
 
         <div className="row-start-2 min-h-0 overflow-x-hidden overflow-y-auto overscroll-y-contain bg-[#f4f6f8] px-3 py-3 sm:px-[6%] sm:py-4">

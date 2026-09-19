@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { MEMBERSHIP_INCLUDES, SPEAKEDGE_BOOK_INCLUDED, planBenefits } from '@/lib/membership';
+import { isMembershipPlan } from '@/lib/plans';
 
 /**
  * Choose Your Membership. Cards are priced transparently — the monthly fee (when
@@ -26,9 +27,11 @@ interface Plan {
   speaking_tests: number;
 }
 
-// Display order. Pro tiers live in their own section below the main memberships;
-// anything not listed here (e.g. the Basic English Course, sold under Books) is
-// not part of this page.
+// Display order for the tiers we shipped with; Pro tiers live in their own
+// section below the main memberships. These lists only fix the *order* — a plan
+// the admin adds later is not listed here and so joins the main grid after
+// Diamond, priced cheapest first. Only NON_MEMBERSHIP_PLAN_KEYS (the Basic
+// English Course, sold under Books) is kept off this page.
 const MAIN_ORDER = ['Tribe', 'Basic', 'Silver', 'Gold', 'Diamond'];
 const PRO_ORDER = ['Silver Pro', 'Gold Pro', 'Diamond Pro'];
 
@@ -61,7 +64,13 @@ export function PlansPage() {
   const [main, pro] = useMemo(() => {
     const pick = (keys: string[]) =>
       keys.map((k) => plans.find((p) => p.plan === k)).filter((p): p is Plan => !!p);
-    return [pick(MAIN_ORDER), pick(PRO_ORDER)];
+    const ordered = new Set([...MAIN_ORDER, ...PRO_ORDER]);
+    // Whatever the catalogue holds beyond the known tiers — an admin-added plan
+    // — still belongs on the page, so it is appended rather than dropped.
+    const extra = plans
+      .filter((p) => !ordered.has(p.plan) && isMembershipPlan(p.plan))
+      .sort((a, b) => admissionOf(a) - admissionOf(b));
+    return [[...pick(MAIN_ORDER), ...extra], pick(PRO_ORDER)];
   }, [plans]);
 
   // Step 1 of the journey. Both routes land on a checkout page that captures

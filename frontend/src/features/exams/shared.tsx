@@ -8,7 +8,7 @@
  * WhatsApp number. Examiner details are resolved server-side from the
  * assignment — nothing here is ever typed by a learner.
  */
-import { GraduationCap, Mic, MessageCircle, Phone, ScrollText, UserRound, Video, type LucideIcon } from 'lucide-react';
+import { GraduationCap, Mic, MessageCircle, Phone, ScrollText, UserRound, type LucideIcon } from 'lucide-react';
 
 export type ExamKind = 'CEFR' | 'Speaking';
 
@@ -108,24 +108,7 @@ export interface ExaminerRow {
   reports_submitted: number;
 }
 
-/**
- * The room the exam is conducted in. Rendered only where the link is already
- * set — the "not set yet" wording belongs to the surface, since it differs for
- * a learner (waiting on it) and an examiner (expected to add it).
- */
-export function JoinMeeting({ url, className }: { url?: string | null; className?: string }) {
-  if (!url) return null;
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      className={className ?? 'btn-primary inline-flex items-center gap-1.5 py-1.5 text-xs'}
-    >
-      <Video size={14} className="shrink-0" /> Join meeting
-    </a>
-  );
-}
+export { JoinMeeting } from '@/components/JoinMeeting';
 
 export interface Eligibility {
   [kind: string]: { allowed: number; used: number; remaining: number };

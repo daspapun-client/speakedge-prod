@@ -523,14 +523,16 @@ export function DashboardHome() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="font-bold text-slate-900">
-                {orientation.status === 'in_progress' ? 'Continue your orientation' : 'Start your orientation'}
+                {orientation.status === 'in_progress' ? 'Your orientation is booked' : 'Book your orientation'}
               </p>
               <p className="mt-0.5 text-xs text-slate-600 sm:text-sm">
-                A quick tour of SpeakEdge to kick off your learning journey.
+                {orientation.status === 'in_progress'
+                  ? 'See your session time and join link.'
+                  : 'Pick a session time to kick off your learning journey.'}
               </p>
             </div>
             <span className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white">
-              {orientation.status === 'in_progress' ? 'Resume' : 'Start'} <ArrowRight size={14} />
+              {orientation.status === 'in_progress' ? 'View' : 'Book'} <ArrowRight size={14} />
             </span>
           </div>
         </Link>

@@ -58,6 +58,8 @@ interface CommunityProfile {
   is_suspended?: boolean;
   cefr_level?: string | null;
   cefr_status?: string;
+  /** Their own room for 1:1 speaking-partner sessions; they set it themselves. */
+  meeting_url?: string | null;
 }
 
 interface Subscription {
@@ -717,6 +719,12 @@ export function AdminStudentProfile() {
                 <DetailRow label="CEFR" value={`${c.cefr_status ?? '—'}${c.cefr_level ? ` · ${c.cefr_level}` : ''}`} />
                 <DetailRow label="Looking for partner" value={c.looking_for_partner ? 'Yes' : 'No'} />
                 <DetailRow label="Suspended" value={c.is_suspended ? 'Yes' : 'No'} />
+                <DetailRow
+                  label="Practice room"
+                  value={c.meeting_url
+                    ? <a className="text-brand hover:underline" href={c.meeting_url} target="_blank" rel="noreferrer">{c.meeting_url}</a>
+                    : 'Not set'}
+                />
               </dl>
               {c.bio && <div className="mt-4"><DetailRow label="Bio" value={c.bio} /></div>}
               <div className="mt-4">

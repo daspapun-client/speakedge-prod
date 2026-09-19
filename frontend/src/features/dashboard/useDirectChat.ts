@@ -20,6 +20,8 @@ export interface FriendInfo {
   first_name?: string | null;
   photo_url?: string | null;
   cefr_level?: string | null;
+  /** Their 1:1 practice room — the thread is friends-only, so it rides along. */
+  meeting_url?: string | null;
 }
 export type ChatStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -35,6 +37,7 @@ function wsUrl(studentId: string, token: string) {
 export function useDirectChat(studentId: string | undefined) {
   const me = useAuth((s) => s.subject);
   const [friend, setFriend] = useState<FriendInfo | null>(null);
+  const [myMeetingUrl, setMyMeetingUrl] = useState<string | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [online, setOnline] = useState<Set<string>>(new Set());
   const [typing, setTyping] = useState(false);
@@ -62,10 +65,11 @@ export function useDirectChat(studentId: string | undefined) {
 
     (async () => {
       try {
-        const data = await unwrap<{ friend: FriendInfo; messages: DirectMessage[] }>(
+        const data = await unwrap<{ friend: FriendInfo; my_meeting_url?: string | null; messages: DirectMessage[] }>(
           api.get(`/community/dm/${studentId}`),
         );
         setFriend(data.friend);
+        setMyMeetingUrl(data.my_meeting_url ?? null);
         seen.current = new Set(data.messages.map((m) => m.id));
         setMessages(data.messages);
       } catch (e) {
@@ -172,5 +176,5 @@ export function useDirectChat(studentId: string | undefined) {
     if (wsRef.current?.readyState === 1) wsRef.current.send('{"type":"typing","is_typing":true}');
   }, []);
 
-  return { friend, messages, online, typing, status, loadError, chatError, send, react, notifyTyping };
+  return { friend, myMeetingUrl, messages, online, typing, status, loadError, chatError, send, react, notifyTyping };
 }

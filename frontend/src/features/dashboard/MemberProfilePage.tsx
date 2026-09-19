@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, UserPlus, Flag, Users, Heart, CheckCircle2, Clock, Crown, Loader2,
-  MessageCircle, Ban, UserX, MoreHorizontal, GraduationCap, User, Sparkles,
+  MessageCircle, Ban, UserX, MoreHorizontal, GraduationCap, User, Sparkles, Video,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { StudentAvatar } from '@/features/admin/_shared';
@@ -20,6 +20,8 @@ interface MemberProfile {
   bio?: string | null;
   interests?: string[];
   looking_for_partner?: boolean;
+  /** Their 1:1 practice room — served only to friends (and to yourself). */
+  meeting_url?: string | null;
   friends_count: number;
   relationship: 'self' | 'friends' | 'request_sent' | 'request_received' | 'blocked' | 'none';
   can_message: boolean;
@@ -388,6 +390,38 @@ export function MemberProfilePage() {
                 {data.age != null && <IntroRow icon={User}>{data.age} years old</IntroRow>}
                 {data.looking_for_partner && (
                   <IntroRow icon={Heart}>Looking for a conversation partner</IntroRow>
+                )}
+                {data.relationship === 'friends' && (
+                  <IntroRow icon={Video}>
+                    {data.meeting_url ? (
+                      <a
+                        href={data.meeting_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold text-brand hover:underline"
+                      >
+                        Join their practice room
+                      </a>
+                    ) : (
+                      <span className="text-slate-500">No practice room shared yet</span>
+                    )}
+                  </IntroRow>
+                )}
+                {isSelf && (
+                  <IntroRow icon={Video}>
+                    {data.meeting_url ? (
+                      <>
+                        Your practice room is shared with your friends.{' '}
+                        <Link to="/dashboard/profile" className="font-semibold text-brand hover:underline">Change it</Link>
+                      </>
+                    ) : (
+                      <>
+                        No practice room yet.{' '}
+                        <Link to="/dashboard/profile" className="font-semibold text-brand hover:underline">Add one</Link>
+                        {' '}so friends can join your 1:1 sessions.
+                      </>
+                    )}
+                  </IntroRow>
                 )}
                 <IntroRow icon={Users}>
                   Member of {data.teams.length} {data.teams.length === 1 ? 'community' : 'communities'}

@@ -36,6 +36,7 @@ from app.db.models import (
 from app.modules.notification import service as notify_service
 from app.shared import file_service
 from app.shared.audit import log_activity
+from app.shared.meeting import clean_meeting_url
 from app.shared.realtime import hub
 from app.shared.students import load_students_map, student_avatar_fields
 
@@ -110,6 +111,22 @@ def _public_card(p: CommunityProfile) -> dict:
 def _member_card(p: CommunityProfile) -> dict:
     data = p.model_dump(mode="json")
     return {k: data.get(k) for k in MEMBER_FIELDS}
+
+
+def _team_json(team: SpeakingTeam, *, meeting: bool = False) -> dict:
+    """A community class as the wire sees it. The meeting link is published to
+    the people attending the class and nobody else — the class list is shown to
+    every member so they can ask to join, and that must not hand a non-member
+    the room its members are speaking in. Same rule as ``_exam_json``."""
+    data = team.model_dump(mode="json")
+    if not meeting:
+        data.pop("meeting_url", None)
+    return data
+
+
+def _manages_team(team: SpeakingTeam, user: CurrentUser) -> bool:
+    """Who conducts the class: the admin, or the member who owns it."""
+    return bool(user.is_admin or (team.owner_student_id and team.owner_student_id == user.subject))
 
 
 # --------------------------------------------------------------------------
@@ -225,6 +242,10 @@ async def member_profile(student_id: str, user: CurrentUser = Depends(require_un
 
     return ok({
         **_member_card(cp),
+        # A practice room is shared with the people you actually practise with:
+        # your friends, and yourself editing it. _member_card never carries it,
+        # so the directory and team rosters cannot leak it.
+        "meeting_url": cp.meeting_url if relationship in ("self", "friends") else None,
         "friends_count": friends,
         "relationship": relationship,
         "can_message": relationship == "friends",
@@ -237,6 +258,9 @@ class ProfileUpdate(BaseModel):
     bio: str | None = None
     interests: list[str] | None = None
     looking_for_partner: bool | None = None
+    # The member's own room for 1:1 speaking-partner sessions. Send "" to clear
+    # it — omitting the field leaves it alone, as with every other field here.
+    meeting_url: str | None = None
 
 
 @router.put("/my-profile")
@@ -244,7 +268,10 @@ async def update_my_profile(body: ProfileUpdate, user: CurrentUser = Depends(req
     cp = await CommunityProfile.find_one(CommunityProfile.student_id == user.subject)
     if not cp:
         raise NotFoundError("Community profile not found")
-    for k, v in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    if "meeting_url" in changes:
+        changes["meeting_url"] = clean_meeting_url(changes["meeting_url"])
+    for k, v in changes.items():
         setattr(cp, k, v)
     cp.touch()
     await cp.save()
@@ -435,6 +462,7 @@ async def my_friends(user: CurrentUser = Depends(require_unlocked_community_stud
         {"student_id": {"$in": friend_ids}, "is_archived": False}
     ).to_list()
     by_id = {p.student_id: _member_card(p) for p in profiles}
+    by_id_room = {p.student_id: p.meeting_url for p in profiles}
 
     rows = []
     for fid in friend_ids:
@@ -450,6 +478,9 @@ async def my_friends(user: CurrentUser = Depends(require_unlocked_community_stud
             DirectMessage.is_read == False,  # noqa: E712
         ).count()
         card["unread_count"] = unread
+        # Every row here is an accepted friend, so their practice room belongs
+        # on it — the friends list is where a 1:1 session actually starts.
+        card["meeting_url"] = by_id_room.get(fid)
         card["last_message"] = last[0].text if last else None
         card["last_message_at"] = last[0].created_at.isoformat() if last else None
         rows.append(card)
@@ -610,8 +641,13 @@ async def dm_thread(student_id: str, user: CurrentUser = Depends(require_unlocke
         DirectMessage.is_read == False,  # noqa: E712
     ).update({"$set": {"is_read": True}})
     cp = await CommunityProfile.find_one(CommunityProfile.student_id == student_id)
+    me = await CommunityProfile.find_one(CommunityProfile.student_id == user.subject)
     friend = _member_card(cp) if cp else {"student_id": student_id, "display_name": student_id}
-    return ok({"friend": friend, "messages": [_dm_payload(m) for m in msgs]})
+    # _guard_dm has already proved these two are friends, so the partner's
+    # practice room belongs in the thread they would arrange the session in.
+    friend["meeting_url"] = cp.meeting_url if cp else None
+    return ok({"friend": friend, "my_meeting_url": me.meeting_url if me else None,
+               "messages": [_dm_payload(m) for m in msgs]})
 
 
 class MessageTextBody(BaseModel):
@@ -762,7 +798,7 @@ async def create_team(
         member_ids=[user.subject],
     )
     await team.insert()
-    return ok(team.model_dump(mode="json"))
+    return ok(_team_json(team, meeting=True))
 
 
 @router.put("/teams/{team_id}")
@@ -789,7 +825,7 @@ async def update_team(
     team.max_members = max_members
     team.touch()
     await team.save()
-    return ok(team.model_dump(mode="json"), "Community class updated")
+    return ok(_team_json(team, meeting=True), "Community class updated")
 
 
 @router.get("/teams")
@@ -800,7 +836,8 @@ async def list_teams(user: CurrentUser = Depends(require_unlocked_community_stud
         TeamJoinRequest.status == "pending",
     ).to_list()
     requested = {r.team_id for r in pending}
-    return ok([{**t.model_dump(mode="json"), "requested": str(t.id) in requested} for t in teams])
+    return ok([{**_team_json(t, meeting=user.subject in t.member_ids),
+                "requested": str(t.id) in requested} for t in teams])
 
 
 @router.post("/teams/{team_id}/join")
@@ -1030,6 +1067,7 @@ async def admin_create_team(
     owner_student_id: str = Form(""),
     class_day: str = Form(""),
     class_time: str = Form(""),
+    meeting_url: str = Form(""),
     banner: UploadFile | None = File(None),
     admin: CurrentUser = Depends(require_admin),
 ):
@@ -1056,6 +1094,7 @@ async def admin_create_team(
         member_ids=member_ids,
         class_day=class_day,
         class_time=class_time,
+        meeting_url=clean_meeting_url(meeting_url),
     )
     await team.insert()
     if owner:
@@ -1068,7 +1107,7 @@ async def admin_create_team(
         target_type="speaking_team", target_id=str(team.id),
         meta={"team_name": team.name, "owner": owner or None},
     )
-    return ok(team.model_dump(mode="json"), "Community class created")
+    return ok(_team_json(team, meeting=True), "Community class created")
 
 
 @router.put("/admin/teams/{team_id}")
@@ -1080,6 +1119,7 @@ async def admin_update_team(
     owner_student_id: str = Form(""),
     class_day: str = Form(""),
     class_time: str = Form(""),
+    meeting_url: str = Form(""),
     member_student_ids: list[str] = Form(default=[]),
     banner: UploadFile | None = File(None),
     remove_banner: str = Form("false"),
@@ -1101,6 +1141,7 @@ async def admin_update_team(
     if len(team.member_ids) > max_members:
         raise ValidationAppError(f"Member limit ({max_members}) is below current roster ({len(team.member_ids)})")
     team.class_day, team.class_time = _parse_schedule(class_day, class_time)
+    team.meeting_url = clean_meeting_url(meeting_url)
     new_banner = await _save_banner(banner)
     if remove_banner.lower() == "true":
         team.banner_url = None
@@ -1128,7 +1169,7 @@ async def admin_update_team(
         target_type="speaking_team", target_id=team_id,
         meta={"team_name": team.name, "owner": owner or None, "members_added": len(added)},
     )
-    return ok(team.model_dump(mode="json"), "Community class updated")
+    return ok(_team_json(team, meeting=True), "Community class updated")
 
 
 @router.get("/admin/teams", dependencies=[Depends(require_admin)])
@@ -1137,7 +1178,7 @@ async def admin_list_teams():
     smap = await load_students_map([t.owner_student_id for t in teams])
     rows = []
     for t in teams:
-        row = t.model_dump(mode="json")
+        row = _team_json(t, meeting=True)
         row["member_count"] = len(t.member_ids)
         row.update(student_avatar_fields(smap.get(t.owner_student_id), "owner"))
         rows.append(row)
@@ -1157,7 +1198,7 @@ async def admin_suspend_team(team_id: str, admin: CurrentUser = Depends(require_
         admin.subject, "community.suspend", role=admin.role.value,
         target_type="speaking_team", target_id=team_id, meta={"team_name": team.name},
     )
-    return ok(team.model_dump(mode="json"), "Community class suspended — chat disabled")
+    return ok(_team_json(team, meeting=True), "Community class suspended — chat disabled")
 
 
 @router.post("/admin/teams/{team_id}/unsuspend")
@@ -1173,7 +1214,54 @@ async def admin_unsuspend_team(team_id: str, admin: CurrentUser = Depends(requir
         admin.subject, "community.unsuspend", role=admin.role.value,
         target_type="speaking_team", target_id=team_id, meta={"team_name": team.name},
     )
-    return ok(team.model_dump(mode="json"), "Community class unsuspended — chat re-enabled")
+    return ok(_team_json(team, meeting=True), "Community class unsuspended — chat re-enabled")
+
+
+# --------------------------------------------------------------------------
+# Meeting room — a community class is conducted on a video link exactly like a
+# teacher-led batch, so it carries one too. Set by admin or by the member who
+# owns (and runs) the class; published to that class's members and nobody else.
+# --------------------------------------------------------------------------
+class MeetingLink(BaseModel):
+    meeting_url: str | None = None  # null / blank clears it
+
+
+@router.post("/teams/{team_id}/meeting-link")
+async def set_team_meeting_link(team_id: str, body: MeetingLink,
+                                user: CurrentUser = Depends(get_current_user)):
+    """Admin **or** the class owner adds/updates the class's Google Meet link.
+
+    Deliberately an inline ``is_admin`` check rather than a portal guard: this
+    one endpoint serves the admin console and the owner's own class page."""
+    team = await SpeakingTeam.get(team_id)
+    if not team or team.is_archived:
+        raise NotFoundError("Community class not found")
+    if not user.is_admin:
+        if user.role != Role.student:
+            raise ForbiddenError("Requires student or admin role")
+        if await _community_locked(user.subject):
+            raise ForbiddenError("Your community access is locked")
+    if not _manages_team(team, user):
+        raise ForbiddenError("Only the class owner or an admin can set the meeting link")
+    team.meeting_url = clean_meeting_url(body.meeting_url)
+    team.touch()
+    await team.save()
+    if team.meeting_url:
+        for sid in team.member_ids:
+            if sid == user.subject:
+                continue
+            await notify_service.notify(
+                sid, "Meeting link ready",
+                f"The meeting link for “{team.name}” is now set — open Community to join.",
+                kind="community",
+            )
+    await log_activity(
+        user.subject, "community.meeting_link", role=user.role.value,
+        target_type="speaking_team", target_id=team_id,
+        meta={"team_name": team.name, "set": bool(team.meeting_url)},
+    )
+    return ok(_team_json(team, meeting=True),
+              "Meeting link updated" if team.meeting_url else "Meeting link removed")
 
 
 # --------------------------------------------------------------------------
@@ -1196,7 +1284,7 @@ async def admin_set_schedule(team_id: str, body: ScheduleBody, admin: CurrentUse
     await log_activity(admin.subject, "community.schedule", role=admin.role.value,
                        target_type="speaking_team", target_id=team_id,
                        meta={"day": team.class_day, "time": team.class_time})
-    return ok(team.model_dump(mode="json"), "Class schedule updated")
+    return ok(_team_json(team, meeting=True), "Class schedule updated")
 
 
 @router.post("/teams/{team_id}/rsvp")
@@ -1414,7 +1502,7 @@ async def team_messages(team_id: str, user: CurrentUser = Depends(get_current_us
         await TeamMessage.find(TeamMessage.team_id == team_id, TeamMessage.is_archived == False)  # noqa: E712
         .sort(TeamMessage.created_at).to_list()
     )
-    return ok({"team": team.model_dump(mode="json"),
+    return ok({"team": _team_json(team, meeting=True),
                "messages": [m.model_dump(mode="json") for m in msgs]})
 
 
@@ -1434,7 +1522,8 @@ async def team_members(team_id: str, user: CurrentUser = Depends(get_current_use
     members = [by_id.get(sid, {"student_id": sid, "display_name": sid}) for sid in team.member_ids]
     for m in members:
         m["is_owner"] = m["student_id"] == team.owner_student_id
-    return ok({"team": team.model_dump(mode="json"), "members": members})
+    return ok({"team": _team_json(team, meeting=user.is_admin or user.subject in team.member_ids),
+               "members": members})
 
 
 class MessageBody(BaseModel):

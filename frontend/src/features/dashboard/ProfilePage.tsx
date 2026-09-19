@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import {
   User, Mail, Phone, MapPin, Camera, Loader2, CheckCircle2, AlertCircle,
-  Settings, IdCard, MessageSquare, ArrowRight, GraduationCap, type LucideIcon,
+  Settings, IdCard, MessageSquare, ArrowRight, GraduationCap, Video, type LucideIcon,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { PageHeader } from '@/features/admin/_shared';
@@ -94,6 +94,83 @@ function profileCompleteness(p: Profile | undefined) {
   if (!p) return 0;
   const fields = [p.full_name, p.phone, p.whatsapp, p.address, p.state, p.district, p.pin_code, p.about_me, p.photo_url];
   return Math.round((fields.filter((f) => f && String(f).trim()).length / fields.length) * 100);
+}
+
+/**
+ * The member's own room for 1:1 speaking-partner sessions — the individual
+ * counterpart of a community class's meeting link. Saved straight to the
+ * community profile (PUT /community/my-profile), which is why it sits outside
+ * the student-profile form and carries its own save button.
+ */
+function PracticeRoomSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['community-profile'],
+    queryFn: () => unwrap<{ meeting_url?: string | null } | null>(api.get('/dashboard/community-profile')),
+  });
+  const [url, setUrl] = useState('');
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (data && !dirty) setUrl(data.meeting_url ?? '');
+  }, [data, dirty]);
+
+  const save = useMutation({
+    mutationFn: (value: string) => unwrap(api.put('/community/my-profile', { meeting_url: value })),
+    onSuccess: () => {
+      setDirty(false);
+      qc.invalidateQueries({ queryKey: ['community-profile'] });
+    },
+  });
+
+  const trimmed = url.trim();
+  const valid = !trimmed || /^https?:\/\//.test(trimmed);
+  const saved = data?.meeting_url ?? '';
+
+  return (
+    <Section
+      title="Speaking partner practice room"
+      icon={Video}
+      description="Your own Google Meet link for 1:1 sessions — shared with your friends in the community, and with nobody else."
+    >
+      {isLoading ? (
+        <div className="h-10 animate-pulse rounded-lg bg-slate-100" />
+      ) : data === null ? (
+        <p className="text-sm text-slate-500">
+          Your community profile is set up once your membership is verified.
+        </p>
+      ) : (
+        <>
+          <label className="label">Google Meet link</label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              className="input sm:flex-1"
+              placeholder="https://meet.google.com/…"
+              value={url}
+              onChange={(e) => { setUrl(e.target.value); setDirty(true); }}
+            />
+            <button
+              type="button"
+              className="btn-primary inline-flex items-center justify-center gap-1.5 sm:w-auto"
+              disabled={!valid || save.isPending || trimmed === saved}
+              onClick={() => save.mutate(trimmed)}
+            >
+              {save.isPending ? <Loader2 size={16} className="animate-spin" /> : <Video size={16} />}
+              {trimmed ? 'Save room' : 'Remove room'}
+            </button>
+          </div>
+          {!valid && <p className="mt-1 text-xs text-red-600">Link must start with http:// or https://</p>}
+          {valid && save.isError && (
+            <p className="mt-1 text-xs text-red-600">{(save.error as Error).message}</p>
+          )}
+          <p className="mt-2 text-xs text-slate-400">
+            Create a meeting in Google Meet, copy its link and paste it here. Your friends will see a Join
+            button on your profile and in your chat with them. Leave it blank to remove it.
+          </p>
+        </>
+      )}
+    </Section>
+  );
 }
 
 export function ProfilePage() {
@@ -348,6 +425,8 @@ export function ProfilePage() {
           </button>
         </div>
       </form>
+
+      <PracticeRoomSection />
 
       <InstructionsPanel preferredLanguage={data?.preferred_language} />
     </div>

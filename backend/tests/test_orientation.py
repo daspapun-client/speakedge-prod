@@ -1,5 +1,5 @@
 """End-to-end orientation flow: admin schedules a self-paced session and enrols a
-student; the student walks the steps and self-completes, unlocking the dashboard."""
+student; the student self-completes it, unlocking the dashboard."""
 import pytest
 
 from app.core.security import Role, create_access_token
@@ -32,18 +32,10 @@ async def test_orientation_self_complete(client):
     assert me["status"] == "pending"
     assert me["batch"]["id"] == batch_id
     assert me["can_self_complete"] is True
-    assert me["total_steps"] == len(me["steps"]) > 0
+    # There is no reading walkthrough any more — only the booking and the session.
+    assert "steps" not in me
 
-    # Advancing progress flips status to in_progress.
-    r = await client.post("/api/v1/orientation/me/progress", headers=student, json={"step": 3})
-    assert r.status_code == 200
-    assert r.json()["data"]["status"] == "in_progress"
-
-    # Completing requires accepting the rules.
-    r = await client.post("/api/v1/orientation/me/complete", headers=student, json={"rules_accepted": False})
-    assert r.status_code == 422
-
-    r = await client.post("/api/v1/orientation/me/complete", headers=student, json={"rules_accepted": True})
+    r = await client.post("/api/v1/orientation/me/complete", headers=student)
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "completed"
 
@@ -70,7 +62,7 @@ async def test_live_session_blocks_self_complete(client):
     assert me["can_self_complete"] is False
 
     # Student cannot self-complete a live session.
-    r = await client.post("/api/v1/orientation/me/complete", headers=student, json={"rules_accepted": True})
+    r = await client.post("/api/v1/orientation/me/complete", headers=student)
     assert r.status_code == 403
 
     # Admin marks the student complete instead.

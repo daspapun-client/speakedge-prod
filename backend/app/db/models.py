@@ -192,7 +192,6 @@ class Student(AuditedDocument):
     # prompt on the dashboard; completion is set by a teacher/admin or self-serve.
     orientation_status: str = "pending"  # pending | in_progress | completed
     orientation_batch_id: Optional[str] = None
-    orientation_step: int = 0  # furthest walkthrough step the student has reached
     orientation_completed_at: Optional[datetime] = None
     orientation_completed_by: Optional[str] = None  # "self" | teacher/admin actor
     # --- Learning preferences (feed the AI prompt engine; no manual prompt edits) ---
@@ -235,6 +234,9 @@ class CommunityProfile(AuditedDocument):
     bio: Optional[str] = None
     interests: list[str] = Field(default_factory=list)  # communication interests
     looking_for_partner: bool = False
+    # The member's own practice room for 1:1 speaking-partner sessions. Shared
+    # with their friends only (never on the public carousel or the directory).
+    meeting_url: Optional[str] = None
     is_suspended: bool = False
 
     class Settings:
@@ -297,6 +299,9 @@ class SpeakingTeam(AuditedDocument):
     is_suspended: bool = False
     class_day: Optional[str] = None   # weekday name, lowercase ("sunday"), IST — matches Batch.day_of_week
     class_time: Optional[str] = None  # "HH:MM" IST
+    # Where the class is actually conducted — the Google Meet link, set by admin
+    # or the class owner and published to the members of this class only.
+    meeting_url: Optional[str] = None
 
     MAX_TEAMS_PER_OWNER: ClassVar[int] = 2
     MAX_MEMBERS: ClassVar[int] = 8
@@ -820,14 +825,14 @@ class OrientationBatch(AuditedDocument):
     """A scheduled New-Student Orientation session. Admin creates it, assigns a
     teacher and enrols students; the teacher (or admin) marks students complete,
     which unlocks the orientation gate on their dashboard. Recorded/self-paced
-    sessions let students complete the walkthrough themselves."""
+    sessions let students mark themselves complete."""
     title: str
     mode: str = "live"  # live | recorded (self-paced)
     scheduled_at: Optional[datetime] = None  # UTC start time (live sessions)
     duration_min: int = 45
     teacher_id: Optional[str] = None  # Teacher.id conducting the session
     meeting_url: Optional[str] = None  # live session join link
-    recording_url: Optional[str] = None  # recorded walkthrough video (self-paced)
+    recording_url: Optional[str] = None  # recorded session video (self-paced)
     agenda: list[str] = Field(default_factory=list)  # optional custom agenda lines
     student_ids: list[str] = Field(default_factory=list)  # enrolled student_ids
     status: str = "scheduled"  # scheduled | completed | cancelled

@@ -9,19 +9,21 @@ export interface PlanPrice {
   monthly_fee: number;
 }
 
-/** Membership tiers on /plans — not book-only or ad-hoc admin catalogue rows. */
-export const MEMBERSHIP_PLAN_KEYS = [
-  'Tribe',
-  'Basic',
-  'Silver',
-  'Gold',
-  'Diamond',
-  'Silver Pro',
-  'Gold Pro',
-  'Diamond Pro',
-] as const;
+/**
+ * Catalogue rows that are sold somewhere other than the membership page (the
+ * Basic English Course lives under Books). Everything else the API returns is a
+ * membership and is shown publicly.
+ *
+ * This is an exclusion list rather than an allowlist of the tiers we shipped
+ * with on purpose: an allowlist meant a plan an admin added from Admin ->
+ * Subscription Plans was fetched and then silently dropped by the browser.
+ */
+export const NON_MEMBERSHIP_PLAN_KEYS = ['Basic English Course'];
 
-const MEMBERSHIP_PLAN_SET = new Set<string>(MEMBERSHIP_PLAN_KEYS);
+const NON_MEMBERSHIP_PLAN_SET = new Set<string>(NON_MEMBERSHIP_PLAN_KEYS);
+
+/** True for every plan that belongs on /plans, custom admin ones included. */
+export const isMembershipPlan = (plan: string) => !NON_MEMBERSHIP_PLAN_SET.has(plan);
 
 /** One-time admission / membership fee charged at checkout (paise). */
 export const admissionOf = (p: PlanPrice) => (p.offer_price != null ? p.offer_price : p.amount);
@@ -30,7 +32,7 @@ export const planRupees = (paise: number) => `₹${(paise / 100).toLocaleString(
 
 export function lowestAdmissionPaise(plans: PlanPrice[]): number | null {
   const prices = plans
-    .filter((p) => MEMBERSHIP_PLAN_SET.has(p.plan))
+    .filter((p) => isMembershipPlan(p.plan))
     .map(admissionOf)
     .filter((paise) => paise > 0);
   if (!prices.length) return null;

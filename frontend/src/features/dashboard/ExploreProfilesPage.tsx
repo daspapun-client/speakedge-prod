@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   Search, UserPlus, Clock, MessageCircle, Users, Loader2, Ban, UserMinus,
-  Check, X, Heart, AlertTriangle,
+  Check, X, Heart, AlertTriangle, Video,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -33,6 +33,8 @@ interface FriendCard {
   cefr_status?: string | null;
   bio?: string | null;
   looking_for_partner?: boolean;
+  /** Their 1:1 practice room — served here because every row is a friend. */
+  meeting_url?: string | null;
   unread_count?: number;
   last_message?: string | null;
   last_message_at?: string | null;
@@ -498,6 +500,17 @@ function FriendRow({
         <Link to={`/dashboard/community/chat/${f.student_id}`} className={fbBtnPrimary('sm:min-w-[7rem]')}>
           <MessageCircle size={16} /> Message
         </Link>
+        {f.meeting_url && (
+          <a
+            href={f.meeting_url}
+            target="_blank"
+            rel="noreferrer"
+            title={`Join ${name}'s practice room`}
+            className="inline-flex min-h-9 w-11 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white transition hover:bg-emerald-700"
+          >
+            <Video size={16} />
+          </a>
+        )}
         <Link to={`/dashboard/community/member/${f.student_id}`} className={fbBtnSecondary('sm:min-w-[7rem]')}>
           View Profile
         </Link>

@@ -57,6 +57,7 @@ from app.modules.exams import service as slots
 from app.modules.notification import service as notif
 from app.shared import pdf_service
 from app.shared.audit import log_activity
+from app.shared.meeting import clean_meeting_url as _clean_meeting_url
 from app.shared.students import load_students_map, student_avatar_fields
 
 router = APIRouter(prefix="/exams", tags=["exams"])
@@ -106,16 +107,6 @@ def _exam_json(exam: Exam, *, meeting: bool = False) -> dict:
         # link to a 1:1 oral test.
         data.pop("meeting_url", None)
     return data
-
-
-def _clean_meeting_url(value: str | None) -> str | None:
-    """The Google Meet (or any) room the sitting is conducted on."""
-    url = (value or "").strip()
-    if not url:
-        return None
-    if not url.startswith(("http://", "https://")):
-        raise ValidationAppError("Meeting link must start with http:// or https://")
-    return url
 
 
 async def _future_slots(rule_id: str) -> list[Exam]:

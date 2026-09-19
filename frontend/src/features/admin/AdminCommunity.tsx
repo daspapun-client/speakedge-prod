@@ -5,6 +5,7 @@ import { Check, Loader2, MessageCircle, Plus, Trash2, Users, X, Ban, ShieldCheck
 import { api, unwrap } from '@/lib/api';
 import { TeamMembersModal } from '@/features/dashboard/MemberList';
 import { AdminStudentLink, Column, DataTable, Modal, PageHeader, StatusBadge, fmtDate } from './_shared';
+import { JoinMeeting } from '@/components/JoinMeeting';
 
 const MAX_COMMUNITY_SIZE = 8;
 const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -117,6 +118,7 @@ function CommunityClassModal({ team, onClose, onDone }: { team?: AdminTeam; onCl
   const [maxMembers, setMaxMembers] = useState(String(team?.max_members ?? 4));
   const [classDay, setClassDay] = useState(team?.class_day ?? '');
   const [classTime, setClassTime] = useState(team?.class_time ?? '');
+  const [meetingUrl, setMeetingUrl] = useState(team?.meeting_url ?? '');
   const [members, setMembers] = useState<MemberPick[]>([]);
   const [membersReady, setMembersReady] = useState(!editing);
 
@@ -164,6 +166,7 @@ function CommunityClassModal({ team, onClose, onDone }: { team?: AdminTeam; onCl
   const memberLimit = Number(maxMembers) || MAX_COMMUNITY_SIZE;
   const minMembers = editing ? Math.max(members.length, 1) : 1;
   const scheduleValid = (!classDay && !classTime) || (!!classDay && !!classTime);
+  const meetingValid = !meetingUrl.trim() || /^https?:\/\//.test(meetingUrl.trim());
   const valid =
     name.trim().length > 0 &&
     description.trim().length > 0 &&
@@ -172,6 +175,7 @@ function CommunityClassModal({ team, onClose, onDone }: { team?: AdminTeam; onCl
     Number(maxMembers) <= MAX_COMMUNITY_SIZE &&
     (!editing || members.length <= memberLimit) &&
     scheduleValid &&
+    meetingValid &&
     (!editing || membersReady);
 
   const submit = (e: FormEvent) => {
@@ -184,6 +188,7 @@ function CommunityClassModal({ team, onClose, onDone }: { team?: AdminTeam; onCl
     if (owner) fd.append('owner_student_id', owner.student_id);
     fd.append('class_day', classDay);
     fd.append('class_time', classTime);
+    fd.append('meeting_url', meetingUrl.trim());
     if (editing) members.forEach((m) => fd.append('member_student_ids', m.student_id));
     save.mutate(fd);
   };
@@ -296,6 +301,19 @@ function CommunityClassModal({ team, onClose, onDone }: { team?: AdminTeam; onCl
           </div>
           {!scheduleValid && <p className="col-span-2 text-xs text-red-600">Set both a day and a time, or leave both blank.</p>}
         </div>
+        <div>
+          <label className="label">Google Meet link <span className="font-normal text-slate-400">(optional)</span></label>
+          <input
+            className="input"
+            placeholder="https://meet.google.com/…"
+            value={meetingUrl}
+            onChange={(e) => setMeetingUrl(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Where this class is conducted. Shown to its members only; the class owner can also set it.
+          </p>
+          {!meetingValid && <p className="mt-1 text-xs text-red-600">Link must start with http:// or https://</p>}
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary inline-flex items-center gap-1" disabled={!valid || save.isPending}>
@@ -338,6 +356,7 @@ interface AdminTeam {
   is_suspended?: boolean;
   class_day?: string | null;
   class_time?: string | null;
+  meeting_url?: string | null;
 }
 
 interface SessionRatings {
@@ -570,6 +589,9 @@ export function AdminCommunity() {
         {t.member_count} / {t.max_members}
       </button>
     ) },
+    { key: 'meeting_url', header: 'Meeting', cell: (t) => (t.meeting_url
+      ? <JoinMeeting url={t.meeting_url} className="btn-ghost inline-flex items-center gap-1.5 py-1 text-xs" />
+      : <span className="text-xs text-slate-400">Not set</span>) },
     { key: 'status', header: 'Status', sort: (t) => (t.is_suspended ? 'suspended' : 'active'), cell: (t) => (
       <StatusBadge status={t.is_suspended ? 'suspended' : 'active'} />
     ) },

@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Send, Users, Pencil, LogOut, Trash2, Loader2, AlertTriangle, X, Reply, SmilePlus, Ban, CheckCheck, Shield, CalendarClock } from 'lucide-react';
+import { ArrowLeft, Send, Users, Pencil, LogOut, Trash2, Loader2, AlertTriangle, X, Reply, SmilePlus, Ban, CheckCheck, Shield, CalendarClock, Video } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Modal } from '@/features/admin/_shared';
@@ -460,11 +460,12 @@ export function TeamChatPage() {
   const [showMembers, setShowMembers] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showMeeting, setShowMeeting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  const { team, messages, online, typing, reads, status, loadError, chatError, send, react, notifyTyping, markRead } =
+  const { team, patchTeam, messages, online, typing, reads, status, loadError, chatError, send, react, notifyTyping, markRead } =
     useTeamChat(teamId);
 
   const { data: members } = useQuery({
@@ -488,6 +489,19 @@ export function TeamChatPage() {
   const updateTeam = useMutation({
     mutationFn: (fd: FormData) => unwrap(api.put(`/community/teams/${teamId}`, fd)),
     onSuccess: () => { setShowEdit(false); invalidateTeams(); },
+    onError: (e: Error) => setActionError(e.message),
+  });
+  const setMeetingLink = useMutation({
+    mutationFn: (url: string) =>
+      unwrap<{ meeting_url?: string | null }>(
+        api.post(`/community/teams/${teamId}/meeting-link`, { meeting_url: url })),
+    onSuccess: (data) => {
+      // The link arrives over REST, not the chat socket — fold it into the
+      // seeded team so the header updates without a reload.
+      patchTeam({ meeting_url: data?.meeting_url ?? null });
+      setShowMeeting(false);
+      invalidateTeams();
+    },
     onError: (e: Error) => setActionError(e.message),
   });
   const leaveTeam = useMutation({
@@ -554,7 +568,11 @@ export function TeamChatPage() {
   const onlineCount = (roster.length ? roster.map((m) => m.student_id) : team.member_ids)
     .filter((id) => online.has(id)).length;
   const isOwner = !adminView && team.owner_student_id === subject;
-  const canDelete = isOwner || (adminView && isAdmin());
+  // Whoever runs the class: its owner, or an admin moderating it. Both the
+  // meeting link and deletion hang off this, so they cannot drift apart.
+  const managesClass = isOwner || (adminView && isAdmin());
+  const canDelete = managesClass;
+  const canSetMeeting = managesClass;
   const canRemoveMembers = adminView && isAdmin();
 
   const handleRemoveMember = (m: MemberCard) => {
@@ -592,6 +610,21 @@ export function TeamChatPage() {
           <ArrowLeft size={14} /> Community Classes
         </Link>
         <div className="ml-auto flex flex-wrap gap-2">
+          {team.meeting_url && (
+            <a
+              href={team.meeting_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+            >
+              <Video size={13} /> Join class
+            </a>
+          )}
+          {canSetMeeting && (
+            <button type="button" className="btn-ghost inline-flex items-center gap-1 px-2.5 py-1.5 text-xs" disabled={actionPending} onClick={() => setShowMeeting(true)}>
+              <Video size={13} /> {team.meeting_url ? 'Meeting link' : 'Add meeting link'}
+            </button>
+          )}
           {isOwner && (
             <button type="button" className="btn-ghost inline-flex items-center gap-1 px-2.5 py-1.5 text-xs" disabled={actionPending} onClick={() => setShowEdit(true)}>
               <Pencil size={13} /> Edit
@@ -870,6 +903,15 @@ export function TeamChatPage() {
         />
       )}
 
+      {showMeeting && (
+        <MeetingLinkModal
+          current={team.meeting_url ?? ''}
+          pending={setMeetingLink.isPending}
+          onClose={() => setShowMeeting(false)}
+          onSave={(url) => setMeetingLink.mutate(url)}
+        />
+      )}
+
       {confirmDelete && (
         <Modal onClose={() => setConfirmDelete(false)}>
           <div className="flex items-start gap-3">
@@ -896,5 +938,49 @@ export function TeamChatPage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+
+/** Paste the Google Meet room this community class is conducted in. */
+function MeetingLinkModal({ current, pending, onClose, onSave }: {
+  current: string;
+  pending: boolean;
+  onClose: () => void;
+  onSave: (url: string) => void;
+}) {
+  const [url, setUrl] = useState(current);
+  const trimmed = url.trim();
+  const valid = !trimmed || /^https?:\/\//.test(trimmed);
+
+  return (
+    <Modal onClose={onClose}>
+      <h3 className="text-lg font-bold text-slate-800">Meeting link</h3>
+      <p className="mt-1 text-sm text-slate-500">
+        Where this class is conducted. Every member gets a Join button and a notification once it is set.
+      </p>
+      <label className="label mt-4 block">Google Meet link</label>
+      <input
+        className="input"
+        placeholder="https://meet.google.com/…"
+        value={url}
+        autoFocus
+        onChange={(e) => setUrl(e.target.value)}
+      />
+      {!valid && <p className="mt-1 text-xs text-red-600">Link must start with http:// or https://</p>}
+      <p className="mt-1 text-xs text-slate-400">Leave it blank to remove the current link.</p>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button
+          type="button"
+          className="btn-primary inline-flex items-center gap-1.5"
+          disabled={!valid || pending}
+          onClick={() => onSave(trimmed)}
+        >
+          {pending ? <Loader2 size={16} className="animate-spin" /> : <Video size={16} />}
+          {trimmed ? 'Save link' : 'Remove link'}
+        </button>
+      </div>
+    </Modal>
   );
 }

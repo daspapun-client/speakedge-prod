@@ -1,7 +1,7 @@
 """New-Student Orientation (Module: Orientation).
 
 One router serving three audiences (guarded per-endpoint, like the teacher module):
-- Student: view/advance their orientation walkthrough and self-complete.
+- Student: book an orientation session (and self-complete a recorded one).
 - Admin: set the weekly session slots, enrol students, mark completion.
 - Teacher: view assigned sessions, share the join link and mark their students
   complete.
@@ -41,23 +41,6 @@ async def my_orientation(user: CurrentUser = Depends(require_student)):
     return ok(await service.get_student_view(student))
 
 
-class ProgressBody(BaseModel):
-    step: int
-
-
-@router.post("/me/progress")
-async def save_progress(body: ProgressBody, user: CurrentUser = Depends(require_student)):
-    student = await membership_service.get_student(user.subject)
-    if student.orientation_status == "completed":
-        return ok(await service.get_student_view(student))
-    student.orientation_step = max(student.orientation_step, max(0, body.step))
-    if student.orientation_status == "pending":
-        student.orientation_status = "in_progress"
-    student.touch()
-    await student.save()
-    return ok(await service.get_student_view(student))
-
-
 class JoinBody(BaseModel):
     batch_id: str
 
@@ -88,12 +71,10 @@ async def join_orientation(body: JoinBody, user: CurrentUser = Depends(require_s
     return ok(await service.get_student_view(student), "You've joined the orientation class")
 
 
-class CompleteBody(BaseModel):
-    rules_accepted: bool = False
-
-
 @router.post("/me/complete")
-async def complete_my_orientation(body: CompleteBody, user: CurrentUser = Depends(require_student)):
+async def complete_my_orientation(user: CurrentUser = Depends(require_student)):
+    """Only a recorded (self-paced) session is finished by the student — a live
+    session is marked complete by the teacher who ran it."""
     student = await membership_service.get_student(user.subject)
     view = await service.get_student_view(student)
     if student.orientation_status == "completed":
@@ -101,8 +82,6 @@ async def complete_my_orientation(body: CompleteBody, user: CurrentUser = Depend
     if not view["can_self_complete"]:
         raise ForbiddenError(
             "Your orientation is completed by your teacher during the live session.")
-    if not body.rules_accepted:
-        raise ValidationAppError("Please accept the rules & guidelines to complete orientation")
     await service.mark_completed(student, "self")
     return ok(await service.get_student_view(student), "Orientation completed")
 

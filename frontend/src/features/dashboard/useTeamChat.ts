@@ -24,6 +24,8 @@ export interface TeamInfo {
   is_suspended?: boolean;
   class_day?: string | null;
   class_time?: string | null;
+  /** Served only to this class's members and to admins. */
+  meeting_url?: string | null;
 }
 export type ChatStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -201,11 +203,16 @@ export function useTeamChat(teamId: string | undefined) {
     if (wsRef.current?.readyState === 1) wsRef.current.send('{"type":"typing","is_typing":true}');
   }, []);
 
+  /** Fold a REST-side change (e.g. the meeting link) into the seeded team. */
+  const patchTeam = useCallback((patch: Partial<TeamInfo>) => {
+    setTeam((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
+
   const markRead = useCallback((messageId: string) => {
     if (messageId && wsRef.current?.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: 'read', message_id: messageId }));
     }
   }, []);
 
-  return { team, messages, online, typing, reads, status, loadError, chatError, send, react, notifyTyping, markRead };
+  return { team, patchTeam, messages, online, typing, reads, status, loadError, chatError, send, react, notifyTyping, markRead };
 }

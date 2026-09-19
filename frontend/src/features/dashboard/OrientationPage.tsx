@@ -1,19 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  ArrowLeft, ArrowRight, CheckCircle2, GraduationCap, PartyPopper, PlayCircle, Users, Video, X,
-} from 'lucide-react';
+import { CheckCircle2, GraduationCap, PartyPopper, PlayCircle, Users, Video, X } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { fmtDate } from '@/features/admin/_shared';
-
-interface Step {
-  key: string;
-  title: string;
-  body: string;
-  points?: string[];
-  requires_accept?: boolean;
-}
 
 interface BatchInfo {
   id: string;
@@ -40,10 +30,7 @@ interface OpenBatch {
 
 interface OrientationView {
   status: 'pending' | 'in_progress' | 'completed';
-  step: number;
   completed_at?: string | null;
-  total_steps: number;
-  steps: Step[];
   batch?: BatchInfo | null;
   can_self_complete: boolean;
   open_batches: OpenBatch[];
@@ -82,13 +69,23 @@ function CompletedScreen({ view }: { view: OrientationView }) {
   );
 }
 
-function SessionCard({ batch }: { batch: BatchInfo }) {
+/** The session the student booked. A live one is marked complete by the teacher
+ *  who runs it — there is nothing for the student to submit. */
+function SessionCard({
+  batch, canSelfComplete, onComplete, completing, error,
+}: {
+  batch: BatchInfo;
+  canSelfComplete: boolean;
+  onComplete: () => void;
+  completing: boolean;
+  error: string;
+}) {
   const isLive = batch.mode === 'live';
   return (
     <div className="card border-brand/20 bg-brand/5">
       <div className="flex items-center gap-2 text-sm font-bold text-brand">
         {isLive ? <Video size={16} /> : <PlayCircle size={16} />}
-        {isLive ? 'Live orientation session' : 'Recorded orientation'}
+        {isLive ? 'Your orientation session is booked' : 'Recorded orientation'}
       </div>
       <p className="mt-2 text-sm text-slate-700">
         <span className="font-semibold">{batch.title}</span>
@@ -98,6 +95,16 @@ function SessionCard({ batch }: { batch: BatchInfo }) {
         {isLive && batch.scheduled_at ? `Scheduled ${fmtDate(batch.scheduled_at)} · ` : ''}
         {batch.duration_min} min
       </div>
+      {!!batch.agenda?.length && (
+        <ul className="mt-3 space-y-1.5">
+          {batch.agenda.map((a) => (
+            <li key={a} className="flex gap-2 text-sm text-slate-700">
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-brand" />
+              <span className="leading-snug">{a}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {isLive ? (
         batch.meeting_url ? (
           <a href={batch.meeting_url} target="_blank" rel="noreferrer" className="btn-primary mt-3 inline-flex py-1.5 text-sm">
@@ -111,11 +118,17 @@ function SessionCard({ batch }: { batch: BatchInfo }) {
           Watch orientation video
         </a>
       ) : null}
-      {isLive && (
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {isLive ? (
         <p className="mt-3 text-xs text-slate-500">
-          Your teacher marks your orientation complete during this session.
+          Nothing more to do — attend the session and your teacher marks your orientation
+          complete during it.
         </p>
-      )}
+      ) : canSelfComplete ? (
+        <button className="btn-gold mt-3 py-1.5 text-sm" disabled={completing} onClick={onComplete}>
+          Mark orientation complete <CheckCircle2 size={15} />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -131,10 +144,10 @@ function JoinBatches({
   return (
     <div className="card">
       <div className="flex items-center gap-2 text-sm font-bold text-brand">
-        <Users size={16} /> Join an orientation class
+        <Users size={16} /> Book your orientation session
       </div>
       <p className="mt-1 text-xs text-slate-500">
-        Pick one class to attend — you can join a single orientation class.
+        Pick one session to attend — you can book a single orientation class.
       </p>
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       {batches.length ? (
@@ -160,7 +173,7 @@ function JoinBatches({
                   disabled={joining !== null}
                   onClick={() => onJoin(b.id)}
                 >
-                  {joining === b.id ? 'Joining…' : 'Join'}
+                  {joining === b.id ? 'Booking…' : 'Book'}
                 </button>
               </li>
             );
@@ -168,7 +181,7 @@ function JoinBatches({
         </ul>
       ) : (
         <p className="mt-3 text-sm text-slate-500">
-          No orientation classes are open right now. Please check back soon — you'll be notified when one is scheduled.
+          No orientation sessions are open right now. Please check back soon — you'll be notified when one is scheduled.
         </p>
       )}
     </div>
@@ -251,43 +264,28 @@ function TutorialVideos() {
 
 export function OrientationPage() {
   const qc = useQueryClient();
-  const [idx, setIdx] = useState(0);
-  const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState('');
+  const [joinError, setJoinError] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['orientation'],
     queryFn: () => unwrap<OrientationView>(api.get('/orientation/me')),
   });
 
-  // Resume where the student left off.
-  useEffect(() => {
-    if (data) setIdx((cur) => (cur === 0 ? Math.min(data.step, data.steps.length - 1) : cur));
-  }, [data]);
-
-  const saveProgress = useMutation({
-    mutationFn: (step: number) => unwrap(api.post('/orientation/me/progress', { step })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['orientation'] }),
-  });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['orientation'] });
+    qc.invalidateQueries({ queryKey: ['orientation-status'] });
+  };
 
   const complete = useMutation({
-    mutationFn: () => unwrap(api.post('/orientation/me/complete', { rules_accepted: accepted })),
-    onSuccess: () => {
-      setError('');
-      qc.invalidateQueries({ queryKey: ['orientation'] });
-      qc.invalidateQueries({ queryKey: ['orientation-status'] });
-    },
+    mutationFn: () => unwrap(api.post('/orientation/me/complete', {})),
+    onSuccess: () => { setError(''); refresh(); },
     onError: (e: Error) => setError(e.message),
   });
 
-  const [joinError, setJoinError] = useState('');
   const join = useMutation({
     mutationFn: (batchId: string) => unwrap(api.post('/orientation/me/join', { batch_id: batchId })),
-    onSuccess: () => {
-      setJoinError('');
-      qc.invalidateQueries({ queryKey: ['orientation'] });
-      qc.invalidateQueries({ queryKey: ['orientation-status'] });
-    },
+    onSuccess: () => { setJoinError(''); refresh(); },
     onError: (e: Error) => setJoinError(e.message),
   });
 
@@ -297,17 +295,6 @@ export function OrientationPage() {
 
   if (data.status === 'completed') return <CompletedScreen view={data} />;
 
-  const steps = data.steps;
-  const step = steps[idx];
-  const isLast = idx === steps.length - 1;
-  const progress = Math.round(((idx + 1) / steps.length) * 100);
-
-  const goNext = () => {
-    const next = Math.min(idx + 1, steps.length - 1);
-    setIdx(next);
-    saveProgress.mutate(next + 1);
-  };
-
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <div>
@@ -316,12 +303,18 @@ export function OrientationPage() {
           <h1 className="text-xl font-extrabold text-slate-900 sm:text-2xl">New Student Orientation</h1>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          A quick tour of SpeakEdge — about 30–60 minutes. Complete it to start your learning journey.
+          A live session with your teacher — about 30–60 minutes. Book the time that suits you.
         </p>
       </div>
 
       {data.batch ? (
-        <SessionCard batch={data.batch} />
+        <SessionCard
+          batch={data.batch}
+          canSelfComplete={data.can_self_complete}
+          onComplete={() => complete.mutate()}
+          completing={complete.isPending}
+          error={error}
+        />
       ) : (
         <JoinBatches
           batches={data.open_batches ?? []}
@@ -330,75 +323,6 @@ export function OrientationPage() {
           error={joinError}
         />
       )}
-
-      {/* Progress */}
-      <div>
-        <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-slate-500">
-          <span>Step {idx + 1} of {steps.length}</span>
-          <span>{progress}%</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${progress}%` }} />
-        </div>
-      </div>
-
-      {/* Step card */}
-      <div className="card">
-        <h2 className="text-lg font-bold text-slate-900">{step.title}</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">{step.body}</p>
-        {!!step.points?.length && (
-          <ul className="mt-4 space-y-2.5">
-            {step.points.map((p) => (
-              <li key={p} className="flex gap-2.5 text-sm text-slate-700">
-                <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-brand" />
-                <span className="leading-snug">{p}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {step.requires_accept && (
-          <label className="mt-5 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
-              checked={accepted}
-              onChange={(e) => setAccepted(e.target.checked)}
-            />
-            <span>I have read and accept the rules & guidelines above.</span>
-          </label>
-        )}
-
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-
-        <div className="mt-6 flex items-center justify-between gap-3">
-          <button
-            className="btn-ghost py-2 text-sm disabled:opacity-40"
-            disabled={idx === 0}
-            onClick={() => setIdx(Math.max(0, idx - 1))}
-          >
-            <ArrowLeft size={15} /> Back
-          </button>
-
-          {!isLast ? (
-            <button className="btn-primary py-2 text-sm" onClick={goNext}>
-              Next <ArrowRight size={15} />
-            </button>
-          ) : data.can_self_complete ? (
-            <button
-              className="btn-gold py-2 text-sm"
-              disabled={(step.requires_accept && !accepted) || complete.isPending}
-              onClick={() => complete.mutate()}
-            >
-              Complete orientation <CheckCircle2 size={15} />
-            </button>
-          ) : (
-            <span className="text-right text-xs text-slate-500">
-              Your teacher will mark your orientation complete during the live session.
-            </span>
-          )}
-        </div>
-      </div>
 
       <TutorialVideos />
     </div>

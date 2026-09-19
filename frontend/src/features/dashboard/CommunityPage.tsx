@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import {
   UserPlus, Users, MessageCircle, AlertTriangle, Plus, Search,
   Sparkles, Compass, Heart, Loader2, Clock, Pencil, ArrowRight,
-  ClipboardCheck, Star, Ban, UserMinus, ChevronDown, Lock, type LucideIcon,
+  ClipboardCheck, Star, Ban, UserMinus, ChevronDown, Lock, Video, type LucideIcon,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -38,6 +38,8 @@ interface Team {
   requested?: boolean;
   class_day?: string | null;
   class_time?: string | null;
+  /** Only served for classes you're in — the server withholds it from the rest. */
+  meeting_url?: string | null;
 }
 
 function fmtTime(time: string): string {
@@ -138,6 +140,8 @@ interface FriendCard {
   first_name?: string | null;
   photo_url?: string | null;
   gender?: string | null;
+  /** Their 1:1 practice room — served here because every row is a friend. */
+  meeting_url?: string | null;
   unread_count?: number;
   last_message?: string | null;
 }
@@ -494,6 +498,24 @@ function GroupCard({
           </div>
         </div>
 
+        {joined && (
+          t.meeting_url ? (
+            <a
+              href={t.meeting_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 hover:shadow-md"
+            >
+              <Video size={15} className="shrink-0" />
+              Join class
+            </a>
+          ) : (
+            <p className="rounded-xl bg-slate-50 px-3 py-2 text-center text-xs font-medium text-slate-400 ring-1 ring-slate-200/60">
+              Meeting link not shared yet
+            </p>
+          )
+        )}
+
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -811,6 +833,17 @@ export function CommunityPage() {
                     subtitle={f.last_message ? (f.last_message.length > 48 ? `${f.last_message.slice(0, 48)}…` : f.last_message) : 'Say hello!'}
                   />
                   <div className="flex items-center gap-2">
+                    {f.meeting_url && (
+                      <a
+                        href={f.meeting_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`Join ${fname}'s practice room`}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                      >
+                        <Video size={14} /> Practice
+                      </a>
+                    )}
                     <Link
                       to={`/dashboard/community/chat/${f.student_id}`}
                       className="relative inline-flex items-center gap-1.5 rounded-xl bg-brand px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-light"

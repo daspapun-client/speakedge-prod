@@ -69,6 +69,20 @@ interface Batch {
   attendance_submitted_dates?: string[];
 }
 
+/** Tailwind's `lg` breakpoint. The batch detail puts the chat in a side column
+ *  only when there is room for one — on a phone it stacks under the roster as the
+ *  collapsible panel instead, so the meet link and attendance own the screen. */
+function useWideViewport() {
+  const [wide, setWide] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => setWide(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return wide;
+}
+
 /** "4 classes · Sep 3 – Sep 24" — a seat is sold by the cycle one monthly fee
  *  buys, so the teacher sees every class it covers, not just this sitting. */
 function cycleLabel(dates?: string[]) {
@@ -300,6 +314,9 @@ function TeacherBatchCard({
   splitChat?: boolean;
 }) {
   const sessionDate = batchDefaultAttendanceDate(batch);
+  /** Side-by-side chat needs the width; on a phone it stacks under the roster. */
+  const wideViewport = useWideViewport();
+  const sideChat = splitChat && wideViewport;
   const [date, setDate] = useState(sessionDate);
   const [classTime, setClassTime] = useState(batch.class_time ?? '');
   const [present, setPresent] = useState<Record<string, boolean>>(() =>
@@ -547,10 +564,10 @@ function TeacherBatchCard({
                       <thead className="border-b border-slate-100 bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         <tr>
                           <th className="px-4 py-3">Student</th>
-                          <th className="px-4 py-3">Phone</th>
-                          <th className="px-4 py-3">WhatsApp</th>
-                          <th className="px-4 py-3">Email</th>
-                          <th className="px-4 py-3">Age</th>
+                          <th className="hidden px-4 py-3 md:table-cell">Phone</th>
+                          <th className="hidden px-4 py-3 md:table-cell">WhatsApp</th>
+                          <th className="hidden px-4 py-3 md:table-cell">Email</th>
+                          <th className="hidden px-4 py-3 md:table-cell">Age</th>
                           <th className="px-4 py-3 text-center">Present</th>
                         </tr>
                       </thead>
@@ -575,19 +592,25 @@ function TeacherBatchCard({
                                       Enrolled for {cycleLabel(s.session_dates)}
                                     </div>
                                   )}
+                                  {(s.phone || s.email) && (
+                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500 md:hidden">
+                                      {s.phone && <PhoneLink phone={s.phone} />}
+                                      {s.email && <EmailLink email={s.email} />}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </td>
-                            <td className="px-4 py-3.5 text-slate-600">
+                            <td className="hidden px-4 py-3.5 text-slate-600 md:table-cell">
                               <PhoneLink phone={s.phone} />
                             </td>
-                            <td className="px-4 py-3.5 text-slate-600">
+                            <td className="hidden px-4 py-3.5 text-slate-600 md:table-cell">
                               <PhoneLink phone={s.whatsapp} />
                             </td>
-                            <td className="px-4 py-3.5 text-slate-600">
+                            <td className="hidden px-4 py-3.5 text-slate-600 md:table-cell">
                               <EmailLink email={s.email} />
                             </td>
-                            <td className="px-4 py-3.5 text-slate-600">
+                            <td className="hidden px-4 py-3.5 text-slate-600 md:table-cell">
                               {s.age != null ? (
                                 <span>
                                   {s.age}
@@ -650,12 +673,12 @@ function TeacherBatchCard({
               />
             )}
 
-            {!splitChat && <BatchChatPanel batchId={batch.id} disabled={locked} />}
+            {!sideChat && <BatchChatPanel batchId={batch.id} disabled={locked} />}
           </div>
         </div>
 
-        {splitChat && (
-          <div className="flex h-full min-h-0 w-full shrink-0 flex-col border-t border-slate-200 lg:w-96 lg:border-l lg:border-t-0">
+        {sideChat && (
+          <div className="flex h-full min-h-0 w-full shrink-0 flex-col border-l border-slate-200 lg:w-96">
             <BatchChatPanel batchId={batch.id} disabled={locked} layout="sidebar" />
           </div>
         )}

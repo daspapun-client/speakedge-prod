@@ -3,7 +3,7 @@
 The orientation is a one-time onboarding session a logged-in student completes
 before diving into the learning journey. Admins schedule orientation batches
 (live or recorded) and assign a teacher; the teacher/admin marks students
-complete (or students self-complete a recorded walkthrough). Completion flips
+complete (or students self-complete a recorded session). Completion flips
 ``Student.orientation_status`` to ``completed`` and unlocks the dashboard prompt.
 
 Sessions are scheduled **weekly** — admin sets a weekday and a start time
@@ -12,8 +12,7 @@ recurrence machinery is ``app/shared/weekly.py``; this module only says what an
 orientation occurrence is built from and what makes one untouchable: a student
 having joined it, or the session already being over.
 
-The walkthrough content below is static (spec-defined) and served to the student
-UI — it does not need to live in the database."""
+There is no reading walkthrough: the student books a session and attends it."""
 from datetime import datetime
 
 from app.db.base import utcnow
@@ -34,106 +33,6 @@ from app.shared.weekly import (  # re-exported: the module's one schedule vocabu
 
 SLOT_HORIZON_WEEKS = weekly.DEFAULT_HORIZON_WEEKS
 
-# The self-navigated walkthrough shown to the student, one card per step. Mirrors
-# the product spec (Welcome → Walkthrough → Benefits → Expectations → Community &
-# Rules → Q&A). The final "Rules & Guidelines" step must be accepted to complete.
-ORIENTATION_STEPS: list[dict] = [
-    {
-        "key": "welcome",
-        "title": "Welcome to SpeakEdge",
-        "body": (
-            "Welcome aboard! This short orientation (about 30–60 minutes) introduces "
-            "you to SpeakEdge and how you'll improve your English speaking here. "
-            "Take your time — you can revisit any step."
-        ),
-        "points": [
-            "What SpeakEdge is and how it works",
-            "A tour of your dashboard and key features",
-            "Your membership benefits, learning routine and community rules",
-        ],
-    },
-    {
-        "key": "introduction",
-        "title": "Platform Introduction",
-        "body": (
-            "SpeakEdge is a complete English communication ecosystem. You learn by "
-            "speaking — through teacher-led classes, conversation teams and regular "
-            "practice — with progress measured by CEFR and speaking assessments."
-        ),
-        "points": [
-            "Learn by speaking, not just studying grammar",
-            "Guided by certified teachers and a supportive community",
-            "Track your level with CEFR & speaking tests",
-        ],
-    },
-    {
-        "key": "walkthrough",
-        "title": "Platform Walkthrough",
-        "body": "Here's where to find everything you'll use day to day.",
-        "points": [
-            "Dashboard — your home base and quick actions",
-            "Profile — keep your details up to date",
-            "Batches & Calendar — your class schedule and meet links",
-            "Community Class — join a conversation team",
-            "Notifications — reminders and updates",
-            "Support Center — help whenever you need it",
-        ],
-    },
-    {
-        "key": "benefits",
-        "title": "Your Membership Benefits",
-        "body": "Your SpeakEdge membership includes:",
-        "points": [
-            "Your own SpeakEdge Student ID",
-            "Teacher-led and conversation team classes",
-            "Complimentary CEFR & speaking assessments",
-            "Community access and learning videos",
-            "Certificate eligibility and student support",
-        ],
-    },
-    {
-        "key": "expectations",
-        "title": "Learning Expectations",
-        "body": (
-            "Consistency is what drives progress. Here's the routine we recommend "
-            "to get the most out of your membership."
-        ),
-        "points": [
-            "Practise speaking a little every day",
-            "Attend your weekly live classes",
-            "Participate actively — speaking is a skill you build",
-            "Watch your milestones as your CEFR level grows",
-        ],
-    },
-    {
-        "key": "community",
-        "title": "Community & Communication",
-        "body": (
-            "Our community is a safe, respectful space to practise with other "
-            "learners. Support is always a message away."
-        ),
-        "points": [
-            "Be kind, encouraging and respectful to every member",
-            "Use the community only to practise and learn",
-            "Reach support on WhatsApp with your Student ID",
-        ],
-    },
-    {
-        "key": "rules",
-        "title": "Rules & Guidelines",
-        "body": (
-            "Please read and accept these guidelines to finish your orientation."
-        ),
-        "points": [
-            "Attend classes on time and inform us if you can't",
-            "Keep your microphone/camera etiquette classroom-appropriate",
-            "Communicate respectfully; harassment is not tolerated",
-            "Share honest feedback so we can help you improve",
-        ],
-        "requires_accept": True,
-    },
-]
-
 
 def _iso(dt: datetime | None) -> str | None:
     """A session time on the wire is an explicit UTC instant — a naive string
@@ -143,8 +42,8 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 async def get_student_view(student: Student) -> dict:
-    """Everything the student orientation page needs: status, progress, the
-    walkthrough content and their assigned session (if any)."""
+    """Everything the student orientation page needs: status, the session they
+    booked (if any) and the sessions still open to book."""
     batch_info = None
     if student.orientation_batch_id:
         batch = await OrientationBatch.get(student.orientation_batch_id)
@@ -165,18 +64,16 @@ async def get_student_view(student: Student) -> dict:
                 "teacher_name": teacher_name,
                 "status": batch.status,
             }
-    # Self-serve completion is allowed when there's no live session gating it:
-    # either no batch assigned, or the assigned session is recorded/self-paced.
-    self_complete = batch_info is None or batch_info["mode"] == "recorded"
+    # Only a recorded (self-paced) session is finished by the student: there is
+    # nothing else for them to complete on their own, and a live session is
+    # marked complete by the teacher who ran it.
+    self_complete = batch_info is not None and batch_info["mode"] == "recorded"
     return {
         "status": student.orientation_status,
-        "step": student.orientation_step,
         "completed_at": (
             student.orientation_completed_at.isoformat()
             if student.orientation_completed_at else None
         ),
-        "total_steps": len(ORIENTATION_STEPS),
-        "steps": ORIENTATION_STEPS,
         "batch": batch_info,
         "can_self_complete": self_complete,
         # Classes the student may self-join (only when they haven't joined one yet).
@@ -243,7 +140,6 @@ async def mark_completed(student: Student, by: str) -> bool:
     if student.orientation_status == "completed":
         return False
     student.orientation_status = "completed"
-    student.orientation_step = len(ORIENTATION_STEPS)
     student.orientation_completed_at = utcnow()
     student.orientation_completed_by = by
     student.touch()
