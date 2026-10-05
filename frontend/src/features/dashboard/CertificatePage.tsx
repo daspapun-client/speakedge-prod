@@ -8,10 +8,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  Award, AlertCircle, ArrowLeft, CalendarClock, Download, Printer, UserRound,
+  Award, AlertCircle, ArrowLeft, CalendarClock, Printer, UserRound,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
-import { PageHeader, downloadExport } from '@/features/admin/_shared';
+import { PageHeader } from '@/features/admin/_shared';
 import artwork from '@/asset/certificate-cefr.png';
 
 export interface CertificateDetail {
@@ -133,19 +133,6 @@ export function CertificatePage() {
             <Link to="/dashboard/exams" className="btn-ghost inline-flex items-center gap-2">
               <ArrowLeft size={16} /> My exams
             </Link>
-            <button
-              type="button"
-              className="btn-ghost inline-flex items-center gap-2"
-              onClick={() =>
-                downloadExport(
-                  `/exams/certificate/${cert.id}/pdf`,
-                  {},
-                  `${cert.certificate_no}.pdf`,
-                )
-              }
-            >
-              <Download size={16} /> PDF copy
-            </button>
             <button type="button" className="btn-primary inline-flex items-center gap-2" onClick={() => window.print()}>
               <Printer size={16} /> Print / Save as PDF
             </button>

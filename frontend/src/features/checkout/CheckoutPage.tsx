@@ -35,8 +35,9 @@ interface Plan {
   monthly_fee: number;
   classes_per_week: number;
   conversation_per_week: number;
-  community_years: number;
-  support_years: number;
+  community_days: number;
+  support_days: number;
+  duration_days: number;
   cefr_tests: number;
   speaking_tests: number;
 }

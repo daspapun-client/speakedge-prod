@@ -139,7 +139,8 @@ def _spec_fields(meta: dict) -> dict:
         # Term overrides are opt-in; empty means "charge the admission fee".
         "prices": {},
         "classes_per_week": meta["teacher"], "conversation_per_week": meta["conv"],
-        "community_years": meta["community"], "support_years": meta["support"],
+        # The spec quotes these two in years; the catalogue stores days.
+        "community_days": meta["community"] * 365, "support_days": meta["support"] * 365,
         "total_classes": meta.get("total_classes", 0),
         "cefr_tests": meta["cefr"], "speaking_tests": meta["speaking"],
         "spec_version": PLAN_SPEC_VERSION,
@@ -366,7 +367,8 @@ async def switch_plan(student_id: str, plan: str, *, months: int | None = None,
     A renewal passes no `carry` and so starts a fresh window, as before."""
     cfg = await get_plan_config(plan)
     now = datetime.now(timezone.utc)
-    days = _months_to_days(months) if months else cfg.duration_days
+    # Validity is the plan's own day count; `months` only keys a price override.
+    days = cfg.duration_days
     started = monthly.as_utc(carry.benefits_start_at or carry.started_at) if carry else now
     await Subscription.find(
         Subscription.student_id == student_id, Subscription.is_active == True  # noqa: E712

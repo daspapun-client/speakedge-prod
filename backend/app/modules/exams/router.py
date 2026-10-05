@@ -1066,6 +1066,11 @@ async def book(exam_id: str, user: CurrentUser = Depends(require_student)):
 # ==========================================================================
 # Examiner dashboard
 # ==========================================================================
+# How long a slot stays on the examiner's dashboard after it ends — an exam
+# that overruns still needs its link and its candidates' phone numbers.
+EXAMINER_SLOT_GRACE_MINUTES = 60
+
+
 async def _my_slots(examiner_id: str) -> dict[str, Exam]:
     return {str(e.id): e for e in await Exam.find(Exam.examiner_id == examiner_id).to_list()}
 
@@ -1100,6 +1105,10 @@ async def _assigned_bookings(examiner: CurrentUser, status: str | None = None,
             "student_name": student.full_name if student else None,
             "student_photo_url": student.photo_url if student else None,
             "student_gender": student.gender if student else None,
+            # The examiner's fallback when the meeting link fails: they can
+            # phone or WhatsApp the candidate sitting their own slot.
+            "student_phone": student.phone if student else None,
+            "student_whatsapp": student.whatsapp if student else None,
             "student_cefr_level": student.cefr_level if student else None,
             "student_audience": student.audience.value if student else None,
             "reported": str(b.id) in reported,
@@ -1137,13 +1146,30 @@ async def examiner_summary(examiner: CurrentUser = Depends(require_examiner)):
 @router.get("/examiner/slots")
 async def examiner_slots(examiner: CurrentUser = Depends(require_examiner),
                          upcoming: bool = False):
-    """The examiner's own assigned exam slots."""
+    """The examiner's own assigned exam slots, each with the candidates booked
+    into it (name + phone/WhatsApp, so the examiner can reach them if the
+    meeting link fails).
+
+    ``upcoming`` keeps a slot until it has *ended* plus
+    ``EXAMINER_SLOT_GRACE_MINUTES`` — dropping it at its start time used to
+    take the meeting link and the candidate list away exactly when the
+    examiner needed them."""
     exams = await Exam.find(Exam.examiner_id == examiner.subject,
                             Exam.is_archived == False).to_list()  # noqa: E712
     if upcoming:
         now = utcnow().replace(tzinfo=None)
-        exams = [e for e in exams if not e.scheduled_at or _naive(e.scheduled_at) >= now]
-    return ok(await _slot_rows(exams, meeting=True))
+        grace = timedelta(minutes=EXAMINER_SLOT_GRACE_MINUTES)
+        exams = [e for e in exams if not e.scheduled_at or
+                 _naive(e.scheduled_at) + timedelta(minutes=e.duration_minutes) + grace >= now]
+    rows = await _slot_rows(exams, meeting=True)
+    bookings, _ = await _assigned_bookings(examiner)
+    by_slot: dict[str, list[dict]] = {}
+    for b in bookings:
+        if b["status"] != "cancelled":
+            by_slot.setdefault(b["exam_id"], []).append(b)
+    for row in rows:
+        row["bookings"] = by_slot.get(row["id"], [])
+    return ok(rows)
 
 
 @router.get("/examiner/assigned")

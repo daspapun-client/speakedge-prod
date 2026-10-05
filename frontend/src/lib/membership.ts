@@ -11,8 +11,8 @@ export interface PlanBenefitDims {
   plan: string;
   classes_per_week: number;
   conversation_per_week: number;
-  community_years: number;
-  support_years: number;
+  community_days: number;
+  support_days: number;
   cefr_tests: number;
   speaking_tests: number;
 }
@@ -39,12 +39,19 @@ export const SPEAKEDGE_BOOK_INCLUDED = 'SpeakEdge Book Included';
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /**
+ * A plan's day count as people read it: whole years stay "2 Years" (the launch
+ * tiers), anything else is quoted in days so a short course reads "45 Days".
+ */
+export const daysLabel = (days: number) =>
+  days > 0 && days % 365 === 0 ? plural(days / 365, 'Year') : plural(days, 'Day');
+
+/**
  * The full benefit list for one plan, in the order the membership sheet lists
  * them: tier-specific benefits first, then what every membership includes.
  */
 export function planBenefits(p: PlanBenefitDims): string[] {
   const out = [
-    `Speaking Community Access: ${plural(p.community_years, 'Year')}`,
+    `Speaking Community Access: ${daysLabel(p.community_days)}`,
     p.conversation_per_week > 0
       ? `${p.conversation_per_week} Conversation Teams + Unlimited Individual Speaking Partners`
       : 'Unlimited Individual Speaking Partners',
@@ -55,6 +62,6 @@ export function planBenefits(p: PlanBenefitDims): string[] {
   ];
   if (p.cefr_tests > 0) out.push(plural(p.cefr_tests, 'CEFR Test'));
   if (p.speaking_tests > 0) out.push(plural(p.speaking_tests, 'Speaking Test'));
-  if (p.support_years > 0) out.push(`Student Relation Support: ${plural(p.support_years, 'Year')}`);
+  if (p.support_days > 0) out.push(`Student Relation Support: ${daysLabel(p.support_days)}`);
   return [...out, ...MEMBERSHIP_INCLUDES];
 }

@@ -8,14 +8,16 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { CalendarClock, CheckCircle2, ClipboardList, Clock, Users, Video } from 'lucide-react';
+import { CalendarClock, CheckCircle2, ClipboardList, Clock, MessageCircle, Phone, Users, Video } from 'lucide-react';
 import {
   Column, DataTable, PageHeader, StatCard, StatusBadge, StudentAvatar,
   TableFilter, fmtDate,
 } from '@/features/admin/_shared';
 import { api, unwrap } from '@/lib/api';
 import { badgeClass } from '@/features/admin/_shared';
-import { JoinMeeting, fmtSlot, slotWindow, type AssignedBooking, type ExamSlot } from '@/features/exams/shared';
+import {
+  JoinMeeting, fmtSlot, slotWindow, whatsappHref, type AssignedBooking, type ExamSlot,
+} from '@/features/exams/shared';
 import { ReportModal } from './ReportModal';
 
 interface Summary {
@@ -25,6 +27,56 @@ interface Summary {
   pending_reports: number;
   reports_submitted: number;
   next_slot?: string | null;
+}
+
+/** An assigned slot plus the candidates holding a seat on it. */
+type ExaminerSlot = ExamSlot & { bookings?: AssignedBooking[] };
+
+/** Started but not yet over — the slot the examiner is conducting right now. */
+function inProgress(slot: ExamSlot) {
+  if (!slot.scheduled_at || !slot.ends_at) return false;
+  const now = Date.now();
+  return new Date(slot.scheduled_at).getTime() <= now && now < new Date(slot.ends_at).getTime();
+}
+
+/**
+ * A candidate booked into the slot, with a way to reach them that does not
+ * depend on the meeting link, and the report button right beside them.
+ */
+function CandidateRow({ booking, onReport }: { booking: AssignedBooking; onReport: (b: AssignedBooking) => void }) {
+  const wa = whatsappHref(booking.student_whatsapp || booking.student_phone);
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <StudentAvatar photoUrl={booking.student_photo_url} gender={booking.student_gender} name={booking.student_name ?? booking.student_id} />
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-slate-800">{booking.student_name ?? '—'}</div>
+          <div className="font-mono text-xs text-slate-400">{booking.student_id}</div>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {booking.student_phone ? (
+          <a href={`tel:${booking.student_phone}`} className="btn-ghost inline-flex items-center gap-1 py-1 text-xs">
+            <Phone size={13} /> {booking.student_phone}
+          </a>
+        ) : (
+          <span className="text-slate-400">No phone on file</span>
+        )}
+        {wa && (
+          <a href={wa} target="_blank" rel="noreferrer" className="btn-ghost inline-flex items-center gap-1 py-1 text-xs">
+            <MessageCircle size={13} /> WhatsApp
+          </a>
+        )}
+        {booking.reported ? (
+          <span className="inline-flex items-center gap-1 font-medium text-emerald-600">
+            <CheckCircle2 size={14} /> Submitted
+          </span>
+        ) : (
+          <button className="btn-primary py-1 text-xs" onClick={() => onReport(booking)}>Submit report</button>
+        )}
+      </div>
+    </li>
+  );
 }
 
 const STATUS_OPTIONS = [
@@ -39,7 +91,9 @@ const STATUS_OPTIONS = [
  * own Google Meet link here; every student holding a seat on that slot is
  * notified and sees it on their Exams page.
  */
-function SlotMeetingRow({ slot, onSaved }: { slot: ExamSlot; onSaved: () => void }) {
+function SlotMeetingRow({ slot, onSaved, onReport }: {
+  slot: ExaminerSlot; onSaved: () => void; onReport: (b: AssignedBooking) => void;
+}) {
   const [url, setUrl] = useState(slot.meeting_url ?? '');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
@@ -58,7 +112,10 @@ function SlotMeetingRow({ slot, onSaved }: { slot: ExamSlot; onSaved: () => void
     <div className="border-t border-slate-100 px-4 py-3 first:border-t-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-semibold text-slate-800">{slot.title}</div>
+          <div className="flex items-center gap-2 font-semibold text-slate-800">
+            {slot.title}
+            {inProgress(slot) && <span className="badge bg-emerald-100 text-emerald-700">In progress</span>}
+          </div>
           <div className="text-xs text-slate-500">
             {fmtSlot(slot.scheduled_at) ?? 'Not scheduled'} · {slotWindow(slot.scheduled_at, slot.duration_minutes)}
           </div>
@@ -90,6 +147,11 @@ function SlotMeetingRow({ slot, onSaved }: { slot: ExamSlot; onSaved: () => void
           No link yet — students booked into this slot are waiting for it.
         </p>
       )}
+      {!!slot.bookings?.length && (
+        <ul className="mt-2 divide-y divide-slate-100 rounded-lg bg-slate-50 px-3">
+          {slot.bookings.map((b) => <CandidateRow key={b.id} booking={b} onReport={onReport} />)}
+        </ul>
+      )}
     </div>
   );
 }
@@ -110,7 +172,7 @@ export function ExaminerHome() {
   });
   const slots = useQuery({
     queryKey: ['examiner-slots'],
-    queryFn: () => unwrap<ExamSlot[]>(api.get('/exams/examiner/slots', { params: { upcoming: true } })),
+    queryFn: () => unwrap<ExaminerSlot[]>(api.get('/exams/examiner/slots', { params: { upcoming: true } })),
   });
 
   const refresh = () => {
@@ -197,7 +259,9 @@ export function ExaminerHome() {
             <div className="flex items-start gap-3">
               <span className="rounded-lg bg-brand/10 p-2 text-brand"><Clock size={18} /></span>
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Next slot</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  {inProgress(next) ? 'In progress' : 'Next slot'}
+                </p>
                 <p className="font-semibold text-slate-800">{next.title}</p>
                 <p className="text-sm text-slate-600">
                   {fmtSlot(next.scheduled_at)} · {slotWindow(next.scheduled_at, next.duration_minutes)}
@@ -218,13 +282,14 @@ export function ExaminerHome() {
             <div>
               <h2 className="font-semibold text-slate-800">Meeting links</h2>
               <p className="text-xs text-slate-500">
-                The room each exam is conducted in. Students booked into the slot are
-                notified as soon as you save it.
+                The room each exam is conducted in, and who is booked into it. Students
+                are notified as soon as you save a link; if the link fails, call or
+                WhatsApp them directly. A slot stays here until an hour after it ends.
               </p>
             </div>
           </div>
           {slots.data.slice(0, 10).map((slot) => (
-            <SlotMeetingRow key={slot.id} slot={slot} onSaved={refresh} />
+            <SlotMeetingRow key={slot.id} slot={slot} onSaved={refresh} onReport={setSelected} />
           ))}
         </section>
       )}

@@ -7,10 +7,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import {
-  AlertCircle, ArrowLeft, CalendarClock, Download, FileText, Printer, UserRound,
+  AlertCircle, ArrowLeft, CalendarClock, FileText, Printer, UserRound,
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
-import { PageHeader, downloadExport } from '@/features/admin/_shared';
+import { PageHeader } from '@/features/admin/_shared';
 import artwork from '@/asset/cefr-result-card.png';
 
 export interface ReportDetail {
@@ -120,19 +120,6 @@ export function ReportCardPage() {
             <Link to="/dashboard/exams" className="btn-ghost inline-flex items-center gap-2">
               <ArrowLeft size={16} /> My exams
             </Link>
-            <button
-              type="button"
-              className="btn-ghost inline-flex items-center gap-2"
-              onClick={() =>
-                downloadExport(
-                  `/exams/report/${report.id}/pdf`,
-                  {},
-                  `${report.report_no}.pdf`,
-                )
-              }
-            >
-              <Download size={16} /> PDF copy
-            </button>
             <button type="button" className="btn-primary inline-flex items-center gap-2" onClick={() => window.print()}>
               <Printer size={16} /> Print / Save as PDF
             </button>

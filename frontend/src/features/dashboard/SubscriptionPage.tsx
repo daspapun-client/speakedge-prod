@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
+import { daysLabel } from '@/lib/membership';
 import { PageHeader, StatusBadge, fmtDay } from '@/features/admin/_shared';
 import { UpgradePlanCta } from '@/features/dashboard/UpgradePlanCta';
 import { PlanChangePanel } from '@/features/dashboard/PlanChangePanel';
@@ -27,7 +28,7 @@ interface Plan {
   label: string;
   classes_per_week: number;
   conversation_per_week: number;
-  community_years: number;
+  community_days: number;
   total_classes: number;
 }
 
@@ -128,7 +129,7 @@ export function SubscriptionPage() {
               <>
                 <StatTile label="Teacher classes / week" icon={BookOpen} value={cfg.classes_per_week || '—'} />
                 <StatTile label="Conversation / week" icon={CreditCard} value={cfg.conversation_per_week || '—'} hint="Conversation-team sessions" />
-                <StatTile label="Community access" icon={Calendar} value={`${cfg.community_years} yr`} />
+                <StatTile label="Community access" icon={Calendar} value={daysLabel(cfg.community_days)} />
               </>
             )}
             <StatTile

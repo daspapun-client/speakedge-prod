@@ -10,12 +10,12 @@ interface Plan {
   offer_price: number | null; // paise; discounted admission (wins over amount)
   monthly_fee: number; // paise — quoted monthly fee, billed separately
   prices: Record<string, number>; // optional month → paise override
-  duration_days: number;
-  durations: number[]; // months offered
+  duration_days: number; // membership validity
+  durations: number[]; // legacy month terms — only key `prices`
   classes_per_week: number; // teacher-led classes / week
   conversation_per_week: number; // conversation teams
-  community_years: number;
-  support_years: number; // student relation support
+  community_days: number;
+  support_days: number; // student relation support
   total_classes: number;
   cefr_tests: number;
   speaking_tests: number;
@@ -24,11 +24,9 @@ interface Plan {
 
 const empty: Plan = {
   plan: '', label: '', amount: 0, offer_price: null, monthly_fee: 0, prices: {}, duration_days: 365,
-  durations: [3, 6, 12], classes_per_week: 1, conversation_per_week: 0, community_years: 1,
-  support_years: 0, total_classes: 0, cefr_tests: 1, speaking_tests: 1, enabled: true,
+  durations: [3, 6, 12], classes_per_week: 1, conversation_per_week: 0, community_days: 365,
+  support_days: 0, total_classes: 0, cefr_tests: 1, speaking_tests: 1, enabled: true,
 };
-const ALL_DURATIONS = [3, 6, 12];
-const durLabel = (m: number) => (m === 12 ? '1 year' : `${m} months`);
 // prices for the plan's offered durations only (paise)
 const termPrices = (p: Plan) => p.durations.map((m) => p.prices[String(m)]).filter((v): v is number => v != null);
 
@@ -44,8 +42,11 @@ export function AdminPlans() {
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-plans'] });
 
   const save = useMutation({
-    mutationFn: (p: Plan) => {
-      if (!p.plan.trim() || !p.label.trim()) throw new Error('Key and label are required');
+    mutationFn: (form: Plan) => {
+      if (!form.plan.trim() || !form.label.trim()) throw new Error('Key and label are required');
+      // One validity, one price: a per-month override left on the row would
+      // out-rank the fee shown in this form with no field left to see it in.
+      const p = { ...form, prices: {} };
       const isNew = !plans.data?.some((x) => x.plan === p.plan);
       return isNew
         ? unwrap(api.post('/payments/plans', p))
@@ -79,8 +80,9 @@ export function AdminPlans() {
     { key: 'monthly_fee', header: 'Monthly', align: 'right', sort: (p) => p.monthly_fee, cell: (p) => (p.monthly_fee > 0 ? rupees(p.monthly_fee) : '—') },
     { key: 'classes_per_week', header: 'Teacher/wk', align: 'right', sort: (p) => p.classes_per_week },
     { key: 'conversation_per_week', header: 'Conv teams', align: 'right', sort: (p) => p.conversation_per_week },
-    { key: 'community_years', header: 'Community', align: 'right', sort: (p) => p.community_years, cell: (p) => `${p.community_years} yr` },
-    { key: 'support_years', header: 'Support', align: 'right', sort: (p) => p.support_years, cell: (p) => (p.support_years > 0 ? `${p.support_years} yr` : '—') },
+    { key: 'duration_days', header: 'Validity', align: 'right', sort: (p) => p.duration_days, cell: (p) => `${p.duration_days} d` },
+    { key: 'community_days', header: 'Community', align: 'right', sort: (p) => p.community_days, cell: (p) => `${p.community_days} d` },
+    { key: 'support_days', header: 'Support', align: 'right', sort: (p) => p.support_days, cell: (p) => (p.support_days > 0 ? `${p.support_days} d` : '—') },
     { key: 'cefr', header: 'CEFR / Speaking', cell: (p) => `${p.cefr_tests} / ${p.speaking_tests}` },
     { key: 'enabled', header: 'Status', sort: (p) => (p.enabled ? 1 : 0), cell: (p) => <StatusBadge status={p.enabled ? 'active' : 'disabled'} /> },
     {
@@ -99,7 +101,7 @@ export function AdminPlans() {
     <div>
       <PageHeader
         title="Subscription Plans"
-        description="Manage the plan catalogue — admission & monthly pricing, durations, teacher/conversation classes, community access and exam benefits."
+        description="Manage the plan catalogue — admission & monthly pricing, validity in days, teacher/conversation classes, community access and exam benefits."
         actions={<button className="btn-primary" onClick={() => { setError(''); setEditing({ ...empty }); }}>+ Add plan</button>}
       />
 
@@ -133,51 +135,20 @@ export function AdminPlans() {
               <input className="input" type="number" value={editing.monthly_fee / 100}
                 onChange={(e) => setEditing((s) => s && { ...s, monthly_fee: Math.round((Number(e.target.value) || 0) * 100) })} />
             </label>
-            <div className="label sm:col-span-2">Durations offered (months)
-              <div className="mt-1 flex gap-4">
-                {ALL_DURATIONS.map((m) => (
-                  <label key={m} className="flex items-center gap-1.5 text-sm font-normal text-slate-700">
-                    <input type="checkbox" checked={editing.durations.includes(m)}
-                      onChange={(e) => setEditing((s) => s && {
-                        ...s,
-                        durations: e.target.checked
-                          ? [...s.durations, m].sort((a, b) => a - b)
-                          : s.durations.filter((x) => x !== m),
-                        // drop the price for a removed term
-                        prices: e.target.checked
-                          ? s.prices
-                          : Object.fromEntries(Object.entries(s.prices).filter(([k]) => k !== String(m))),
-                      })} />
-                    {durLabel(m)}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="label sm:col-span-2">Price per duration (₹) — optional override; blank charges the admission fee
-              <div className="mt-1 grid gap-3 sm:grid-cols-3">
-                {editing.durations.map((m) => (
-                  <label key={m} className="text-xs font-medium text-slate-500">{durLabel(m)}
-                    <input className="input mt-1" type="number"
-                      value={editing.prices[String(m)] == null ? '' : editing.prices[String(m)] / 100}
-                      onChange={(e) => setEditing((s) => s && {
-                        ...s,
-                        prices: { ...s.prices, [String(m)]: Math.round((Number(e.target.value) || 0) * 100) },
-                      })} />
-                  </label>
-                ))}
-              </div>
-            </div>
+            <label className="label sm:col-span-2">Duration / membership validity (days)
+              <input className="input" type="number" min={1} value={editing.duration_days} onChange={(e) => num('duration_days', e.target.value)} />
+            </label>
             <label className="label">Teacher-led classes / week
               <input className="input" type="number" value={editing.classes_per_week} onChange={(e) => num('classes_per_week', e.target.value)} />
             </label>
             <label className="label">Conversation teams
               <input className="input" type="number" value={editing.conversation_per_week} onChange={(e) => num('conversation_per_week', e.target.value)} />
             </label>
-            <label className="label">Community access (years)
-              <input className="input" type="number" value={editing.community_years} onChange={(e) => num('community_years', e.target.value)} />
+            <label className="label">Community access (days)
+              <input className="input" type="number" min={0} value={editing.community_days} onChange={(e) => num('community_days', e.target.value)} />
             </label>
-            <label className="label">Student relation support (years)
-              <input className="input" type="number" value={editing.support_years} onChange={(e) => num('support_years', e.target.value)} />
+            <label className="label">Student relation support (days) — 0 = not included
+              <input className="input" type="number" min={0} value={editing.support_days} onChange={(e) => num('support_days', e.target.value)} />
             </label>
             <label className="label">Total classes (optional)
               <input className="input" type="number" value={editing.total_classes} onChange={(e) => num('total_classes', e.target.value)} />

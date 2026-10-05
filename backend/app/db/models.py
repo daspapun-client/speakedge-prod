@@ -7,7 +7,7 @@ from typing import ClassVar, Optional
 
 import pymongo
 from beanie import Document, Indexed
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.core.security import Role
 from app.db.base import AuditedDocument, utcnow
@@ -491,18 +491,31 @@ class PlanConfig(AuditedDocument):
     # Optional per-term price override (month count as a string → paise). Empty
     # by default: checkout then charges the admission fee alone.
     prices: dict[str, int] = Field(default_factory=dict)
-    duration_days: int        # fallback validity when a month count isn't given
-    durations: list[int] = Field(default_factory=lambda: [3, 6, 12])  # months offered
+    duration_days: int        # membership validity in days — set per plan by admin
+    # Legacy month terms. Validity no longer reads them (see `duration_days`);
+    # they survive only as the keys of the optional `prices` override.
+    durations: list[int] = Field(default_factory=lambda: [3, 6, 12])
     classes_per_week: int = 1        # teacher-led classes / week
     conversation_per_week: int = 0   # conversation teams available
-    community_years: int = 1         # community access duration (years)
-    support_years: int = 0           # student relation support (years)
+    community_days: int = 365        # community access duration (days)
+    support_days: int = 0            # student relation support (days)
     total_classes: int = 0
     cefr_tests: int = 1       # total CEFR test eligibility for this tier
     speaking_tests: int = 1   # total Speaking test eligibility for this tier
     enabled: bool = True
     # Bumped when the spec catalogue changes; older rows are refreshed once.
     spec_version: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _years_to_days(cls, data):
+        """Rows saved before these two were day-based stored whole years."""
+        if isinstance(data, dict):
+            for old, new in (("community_years", "community_days"),
+                             ("support_years", "support_days")):
+                if new not in data and data.get(old) is not None:
+                    data[new] = data[old] * 365
+        return data
 
     class Settings:
         name = "plan_configs"

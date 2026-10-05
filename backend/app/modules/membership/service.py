@@ -172,7 +172,7 @@ async def _start_paid_subscription(ac, student_id: str) -> None:
 
     await Subscription(
         student_id=student_id, plan=ac.plan, started_at=now,
-        expires_at=now + timedelta(days=pay._months_to_days(months)),
+        expires_at=now + timedelta(days=cfg.duration_days),
         is_active=True, months=months,
         first_month_included=getattr(ac, "first_month_included", False),
         cefr_tests=cfg.cefr_tests, speaking_tests=cfg.speaking_tests,

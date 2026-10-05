@@ -1012,29 +1012,29 @@ body {
     margin: 0;
   }
 
-  body {
-    background: #fff;
+  /* Chrome paints position:fixed on every page, and visibility:hidden still
+     occupies space, so a dashboard taller than one sheet printed the
+     certificate twice. Drop the chrome and place the sheet once. */
+  body *:not(:has(.cert-sheet)):not(:has(.result-sheet)):not(.cert-sheet):not(.result-sheet):not(.cert-sheet *):not(.result-sheet *) {
+    display: none !important;
   }
 
-  /* Print the document alone, not the dashboard around it. */
-  body * {
-    visibility: hidden;
-  }
-
-  .cert-sheet,
-  .cert-sheet *,
-  .result-sheet,
-  .result-sheet * {
-    visibility: visible;
+  :has(.cert-sheet),
+  :has(.result-sheet) {
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
   }
 
   .cert-sheet,
   .result-sheet {
-    position: fixed;
+    position: absolute;
     inset: 0;
     margin: auto;
     width: 280mm;
     min-width: 0;
+    max-width: none;
     height: 186.667mm;
     box-shadow: none;
     -webkit-print-color-adjust: exact;

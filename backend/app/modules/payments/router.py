@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from app.core.config import settings
 from app.core.envelope import ok
@@ -68,7 +68,7 @@ def _plan_view(c: PlanConfig) -> dict:
         "monthly_fee": c.monthly_fee, "prices": c.prices,
         "duration_days": c.duration_days, "durations": c.durations,
         "classes_per_week": c.classes_per_week, "conversation_per_week": c.conversation_per_week,
-        "community_years": c.community_years, "support_years": c.support_years,
+        "community_days": c.community_days, "support_days": c.support_days,
         "total_classes": c.total_classes,
         "cefr_tests": c.cefr_tests, "speaking_tests": c.speaking_tests, "enabled": c.enabled,
     }
@@ -88,12 +88,12 @@ class PlanCreate(BaseModel):
     offer_price: int | None = None
     monthly_fee: int = 0
     prices: dict[str, int] = {}
-    duration_days: int = 365
+    duration_days: int = Field(365, ge=1)
     durations: list[int] = [3, 6, 12]
     classes_per_week: int = 1
     conversation_per_week: int = 0
-    community_years: int = 1
-    support_years: int = 0
+    community_days: int = Field(365, ge=0)
+    support_days: int = Field(0, ge=0)
     total_classes: int = 0
     cefr_tests: int = 1
     speaking_tests: int = 1
@@ -117,12 +117,12 @@ class PlanUpdate(BaseModel):
     offer_price: int | None = None
     monthly_fee: int | None = None
     prices: dict[str, int] | None = None
-    duration_days: int | None = None
+    duration_days: int | None = Field(None, ge=1)
     durations: list[int] | None = None
     classes_per_week: int | None = None
     conversation_per_week: int | None = None
-    community_years: int | None = None
-    support_years: int | None = None
+    community_days: int | None = Field(None, ge=0)
+    support_days: int | None = Field(None, ge=0)
     total_classes: int | None = None
     cefr_tests: int | None = None
     speaking_tests: int | None = None

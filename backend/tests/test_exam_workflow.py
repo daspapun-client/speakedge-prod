@@ -16,6 +16,7 @@ from app.db.models import (
     CEFRStatus,
     Certificate,
     CommunityProfile,
+    Exam,
     Student,
     Subscription,
     User,
@@ -519,3 +520,41 @@ async def test_booked_slot_cannot_be_deleted(client):
     await client.post(f"/api/v1/exams/{slot['id']}/book", headers=sh)
     # ...refused once a learner holds a seat.
     assert (await client.delete(f"/api/v1/exams/{slot['id']}", headers=ah)).status_code == 409
+
+
+async def test_examiner_keeps_slot_and_candidate_contact_while_exam_runs(client):
+    """A slot used to vanish from the examiner's dashboard at its start time,
+    taking the meeting link with it. It now stays until it has ended (plus a
+    grace hour) and carries each candidate's name + phone as a fallback."""
+    ah = await _admin(client)
+    sh = await _student(client)
+    await _add_examiner(client, ah, "ex1@speakedge.in", "Rina Sen", "9876543210")
+    await client.post("/api/v1/exams/slots/bulk", headers=ah, json={
+        "kind": "CEFR", "title": "CEFR Assessment", "dates": [_future()], "times": ["11:30"],
+        "duration_minutes": 20, "capacity": 1, "examiner_id": "ex1@speakedge.in",
+    })
+    slot = (await client.get("/api/v1/exams/", headers=sh)).json()["data"][0]
+    assert (await client.post(f"/api/v1/exams/{slot['id']}/book", headers=sh)).status_code == 200
+    eh = await _login(client, "ex1@speakedge.in", "Examiner@123")
+
+    exam = await Exam.get(slot["id"])
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    async def upcoming():
+        return (await client.get("/api/v1/exams/examiner/slots", headers=eh,
+                                 params={"upcoming": True})).json()["data"]
+
+    # Five minutes into the exam: still listed, with the candidate to call.
+    exam.scheduled_at = now - timedelta(minutes=5)
+    await exam.save()
+    rows = await upcoming()
+    assert [r["id"] for r in rows] == [slot["id"]]
+    [b] = rows[0]["bookings"]
+    assert b["student_name"] == "Asha Rao"
+    assert b["student_phone"] == "9990001111"
+    assert b["reported"] is False
+
+    # Over an hour after it ended: gone from the upcoming list.
+    exam.scheduled_at = now - timedelta(minutes=20 + 61)
+    await exam.save()
+    assert await upcoming() == []

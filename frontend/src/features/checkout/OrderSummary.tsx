@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Check, ShoppingBag, Truck } from 'lucide-react';
-import { planBenefits } from '@/lib/membership';
+import { daysLabel, planBenefits } from '@/lib/membership';
 
 interface PlanSummary {
   plan: string;
@@ -9,10 +9,11 @@ interface PlanSummary {
   monthly_fee: number;
   classes_per_week: number;
   conversation_per_week: number;
-  community_years: number;
-  support_years: number;
+  community_days: number;
+  support_days: number;
   cefr_tests: number;
   speaking_tests: number;
+  duration_days?: number; // membership validity
 }
 
 interface BookSummary {
@@ -259,9 +260,9 @@ export function OrderSummary({
             </span>
             <span className="text-xl font-bold tabular-nums tracking-tight">{rupees(total)}</span>
           </div>
-          {months != null && (
+          {months != null && plan.duration_days != null && (
             <p className="border-t border-white/10 px-4 py-2.5 text-xs text-slate-400">
-              Membership validity: {months} months from payment.
+              Membership validity: {daysLabel(plan.duration_days).toLowerCase()} from payment.
             </p>
           )}
         </div>

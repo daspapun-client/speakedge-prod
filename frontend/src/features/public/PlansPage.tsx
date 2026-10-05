@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { MEMBERSHIP_INCLUDES, SPEAKEDGE_BOOK_INCLUDED, planBenefits } from '@/lib/membership';
+import { MEMBERSHIP_INCLUDES, SPEAKEDGE_BOOK_INCLUDED, daysLabel, planBenefits } from '@/lib/membership';
 import { isMembershipPlan } from '@/lib/plans';
 
 /**
@@ -21,8 +21,8 @@ interface Plan {
   monthly_fee: number; // paise — quoted per month, billed separately
   classes_per_week: number; // teacher-led classes / week
   conversation_per_week: number; // conversation teams
-  community_years: number;
-  support_years: number; // student relation support
+  community_days: number;
+  support_days: number; // student relation support
   cefr_tests: number;
   speaking_tests: number;
 }
@@ -35,12 +35,12 @@ interface Plan {
 const MAIN_ORDER = ['Tribe', 'Basic', 'Silver', 'Gold', 'Diamond'];
 const PRO_ORDER = ['Silver Pro', 'Gold Pro', 'Diamond Pro'];
 
-// The membership term is not a customer choice any more; validity is annual.
+// The membership term is not a customer choice any more; validity is the
+// plan's own `duration_days`, and this only keys an optional price override.
 const MEMBERSHIP_MONTHS = 12;
 
 const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN')}`;
 const admissionOf = (p: Plan) => (p.offer_price != null ? p.offer_price : p.amount);
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 // Tribe has no admission step — it is a flat membership fee.
 const feeLabel = (p: Plan) =>
   p.plan === 'Tribe' ? 'One-Time Membership Fee' : 'One-Time Admission Fee';
@@ -208,7 +208,7 @@ function ComparisonTable({ plans }: { plans: Plan[] }) {
         />
         <Row label="One-time membership / admission fee" cells={plans.map((p) => rupees(admissionOf(p)))} />
         <BoolRow label="SpeakEdge Book included" cells={plans.map(() => true)} />
-        <Row label="Speaking community access" cells={plans.map((p) => plural(p.community_years, 'year'))} />
+        <Row label="Speaking community access" cells={plans.map((p) => daysLabel(p.community_days).toLowerCase())} />
         <Row
           label="Conversation teams"
           cells={plans.map((p) => (p.conversation_per_week > 0 ? String(p.conversation_per_week) : '—'))}
@@ -223,7 +223,7 @@ function ComparisonTable({ plans }: { plans: Plan[] }) {
         <Row label="Speaking tests" cells={plans.map((p) => (p.speaking_tests > 0 ? String(p.speaking_tests) : '—'))} />
         <Row
           label="Student relation support"
-          cells={plans.map((p) => (p.support_years > 0 ? plural(p.support_years, 'year') : '—'))}
+          cells={plans.map((p) => (p.support_days > 0 ? daysLabel(p.support_days).toLowerCase() : '—'))}
         />
         {MEMBERSHIP_INCLUDES.map((label) => (
           <BoolRow key={label} label={label} cells={plans.map(() => true)} />

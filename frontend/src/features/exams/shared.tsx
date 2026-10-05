@@ -87,6 +87,9 @@ export interface AssignedBooking extends ExamBooking {
   student_name?: string | null;
   student_photo_url?: string | null;
   student_gender?: string | null;
+  /** Examiner-only: how to reach the candidate if the meeting link fails. */
+  student_phone?: string | null;
+  student_whatsapp?: string | null;
   student_cefr_level?: string | null;
   student_audience?: string | null;
   reported: boolean;
