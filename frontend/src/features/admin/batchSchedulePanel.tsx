@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, unwrap } from '@/lib/api';
 import { parseApiDate, todayIsoIST } from '@/lib/datetime';
 import { scheduleDateParts } from '@/features/batch/shared';
-import { Paginator, StudentAvatar, TableFilter } from './_shared';
+import { Paginator, StudentAvatar, TableFilter, fmtDay, rupees } from './_shared';
 
 export interface AdminListBatch {
   id: string;
@@ -30,11 +30,47 @@ export interface AdminListBatch {
   class_sessions?: BatchSession[];
 }
 
+/** The student's next unpaid monthly fee, as `GET /payments/monthly-due` shapes it. */
+export interface FeeDue {
+  due_date: string;
+  amount: number;
+  overdue: boolean;
+  days_until: number;
+}
+
+/** What the student owes on their monthly fee, shown wherever admin decides a
+ *  class join request — the decision should never be made blind to it. */
+export function FeeDueBadge({ fee }: { fee?: FeeDue | null }) {
+  if (!fee) return <span className="badge bg-green-100 text-green-700">No monthly fee due</span>;
+  return fee.overdue ? (
+    <span className="badge bg-red-100 text-red-700">
+      Monthly fee overdue · {rupees(fee.amount)} · was due {fmtDay(fee.due_date)}
+    </span>
+  ) : (
+    <span className="badge bg-amber-100 text-amber-700">
+      Next monthly fee {rupees(fee.amount)} · due {fmtDay(fee.due_date)}
+    </span>
+  );
+}
+
+/** Approving a student whose fee is overdue is allowed, but never by accident. */
+export function confirmApproveJoin(name: string, fee?: FeeDue | null): boolean {
+  if (!fee?.overdue) return true;
+  return window.confirm(
+    `${name} has an unpaid monthly fee of ${rupees(fee.amount)}, due ${fmtDay(fee.due_date)}.
+
+`
+    + 'Approve this class request anyway?',
+  );
+}
+
 export interface PendingJoin {
   student_id: string;
   name: string;
   photo_url?: string | null;
   gender?: string | null;
+  /** Null when nothing is owed (or the plan has no monthly fee). */
+  fee_due?: FeeDue | null;
 }
 
 export interface BatchSession {

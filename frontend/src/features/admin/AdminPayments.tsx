@@ -130,7 +130,14 @@ function GeneralPaymentModal({ onClose, onSaved }: { onClose: () => void; onSave
   );
 }
 
-const STATUSES = ['', 'created', 'paid', 'failed', 'manually_approved', 'refunded', 'partially_refunded', 'cancelled'];
+const STATUSES = ['', 'paid', 'manually_approved', 'failed', 'refunded', 'partially_refunded', 'cancelled', 'created'];
+/** `created` is a checkout the buyer opened and never completed — no money
+ *  moved. The server keeps those out of the default list; they are only shown
+ *  when this filter asks for them. */
+const STATUS_LABELS: Record<string, string> = {
+  '': 'All payments',
+  created: 'Checkout not completed (unpaid)',
+};
 const REFUND_STATUSES = ['Refund Requested', 'Refund Under Review', 'Refund Approved', 'Refund Rejected', 'Refunded', 'Partially Refunded'];
 
 export function AdminPayments() {
@@ -157,6 +164,17 @@ export function AdminPayments() {
   const approve = useMutation({
     mutationFn: (p: Payment) => {
       if (!p.razorpay_order_id) throw new Error('This payment has no order id to approve');
+      // Approving records the money as received and grants whatever it paid
+      // for — never a one-click action on a checkout nobody completed.
+      const ok = window.confirm(
+        `Mark ${rupees(p.amount)} from ${p.student_name || p.student_id} as RECEIVED?
+
+`
+        + 'Only do this if the money has actually reached you outside the payment gateway. '
+        + 'The student did not complete this payment online, and approving it settles the fee '
+        + 'and unlocks what it pays for.',
+      );
+      if (!ok) throw new Error('Approval cancelled — the payment is still unpaid.');
       const ref = window.prompt('Transaction reference (optional)?') || undefined;
       return unwrap(api.post('/payments/manual-approve', {
         order_id: p.razorpay_order_id, payment_mode: 'manual', transaction_ref: ref,
@@ -189,7 +207,7 @@ export function AdminPayments() {
     ) },
     { key: 'kind', header: 'Kind / Plan', sort: (p) => p.kind, cell: (p) => <>{p.kind}{p.plan ? ` · ${p.plan}` : ''}{p.purpose ? ` · ${p.purpose}` : ''}</> },
     { key: 'amount', header: 'Amount', align: 'right', sort: (p) => p.amount, cell: (p) => <span className="font-semibold">{rupees(p.amount)}</span> },
-    { key: 'status', header: 'Status', sort: (p) => p.status, cell: (p) => <StatusBadge status={p.status} /> },
+    { key: 'status', header: 'Status', sort: (p) => p.status, cell: (p) => <StatusBadge status={p.status === 'created' ? 'not paid' : p.status} /> },
     { key: 'refund_status', header: 'Refund', cell: (p) => (p.refund_status ? <StatusBadge status={p.refund_status} /> : '—') },
     {
       key: 'actions',
@@ -197,7 +215,7 @@ export function AdminPayments() {
       cell: (p) => (
         <div className="flex flex-wrap gap-1">
           {(p.status === 'created' || p.status === 'failed') && (
-            <button className="btn-ghost py-1 text-xs" onClick={() => approve.mutate(p)}>Approve</button>
+            <button className="btn-ghost py-1 text-xs" onClick={() => approve.mutate(p)}>Mark as received</button>
           )}
           <button className="btn-ghost py-1 text-xs" onClick={() => setRefund.mutate(p)}>Refund</button>
         </div>
@@ -231,6 +249,13 @@ export function AdminPayments() {
         }
       />
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {status === 'created' && (
+        <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200/80">
+          These are checkouts a student opened and did not complete — <strong>no money was received</strong>.
+          The fee stays due on the student's dashboard. Use “Mark as received” only for money that
+          reached you outside the gateway.
+        </p>
+      )}
       {recording && (
         <GeneralPaymentModal onClose={() => setRecording(false)} onSaved={refresh} />
       )}
@@ -246,7 +271,7 @@ export function AdminPayments() {
             <TableFilter
               value={status}
               onChange={(v) => { setStatus(v); setPage(1); }}
-              options={STATUSES.map((s) => ({ value: s, label: s || 'All statuses' }))}
+              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))}
             />
             <input
               className="input max-w-xs"

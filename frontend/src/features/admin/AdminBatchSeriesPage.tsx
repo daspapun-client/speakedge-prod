@@ -7,7 +7,9 @@ import { scheduleDateParts } from '@/features/batch/shared';
 import { AdminStudentLink } from './_shared';
 import {
   BatchClassesPanel,
+  FeeDueBadge,
   batchMeta,
+  confirmApproveJoin,
   batchTime,
   findAdminListBatchByPrimaryId,
   isParentBatch,
@@ -65,6 +67,7 @@ function JoinRequestsPanel({ sessions }: { sessions: BatchSession[] }) {
                   ? `${dates.length} consecutive classes from ${scheduleDateParts(dates[0])?.fullLabel ?? dates[0]}`
                   : `Class on ${scheduleDateParts(session.date)?.fullLabel ?? session.date}`}
               </p>
+              <p className="mt-1"><FeeDueBadge fee={student.fee_due} /></p>
             </div>
             <span className="flex flex-wrap items-center gap-2">
               <Link to={`/admin/batches/${session.batch_id}`} className="text-xs text-brand hover:underline">Open class</Link>
@@ -72,7 +75,8 @@ function JoinRequestsPanel({ sessions }: { sessions: BatchSession[] }) {
                 type="button"
                 className="btn-ghost py-1 text-xs text-green-600"
                 disabled={act.isPending}
-                onClick={() => act.mutate({ batchId: session.batch_id, studentId: student.student_id, decision: 'approve' })}
+                onClick={() => confirmApproveJoin(student.name, student.fee_due)
+                  && act.mutate({ batchId: session.batch_id, studentId: student.student_id, decision: 'approve' })}
               >
                 Approve
               </button>

@@ -164,3 +164,29 @@ async def next_due(student_id: str) -> dict | None:
             "reminder_active": days_until <= REMINDER_DAYS,
         }
     return None
+
+
+async def class_block(student_id: str) -> dict | None:
+    """The overdue monthly fee that keeps this student out of a new teacher-led
+    class, or None when they may join.
+
+    A fee is only *overdue* once its due date has passed — one that is merely
+    coming up does not block. And until admin has set the class start date the
+    schedule is counted from the subscription start, so a member who has never
+    held a seat in a class is not held to it: their first fee falls due a month
+    after their first class, not a month after they enrolled."""
+    from app.db.models import Batch
+
+    due = await next_due(student_id)
+    if not due or not due["overdue"]:
+        return None
+    if not due["class_start_set"] and not await Batch.find_one({"student_ids": student_id}):
+        return None
+    return due
+
+
+def due_message(due: dict) -> str:
+    """How an unpaid monthly fee reads to the student who owes it."""
+    when = datetime.fromisoformat(due["due_date"]).strftime("%d %b %Y")
+    return (f"Your monthly fee of ₹{due['amount'] / 100:,.0f} was due on {when}. "
+            "Please pay it before joining a class.")

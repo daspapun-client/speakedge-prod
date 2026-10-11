@@ -574,10 +574,18 @@ async def admin_payments(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
 ):
-    """Full payment records incl. failed attempts, with search and filters."""
+    """Payment records incl. failed attempts, with search and filters.
+
+    A `created` row is a checkout the buyer opened and never completed — no
+    money moved. Those are left out unless asked for by status: listed beside
+    real payments they read as something waiting on admin, and approving one
+    marks a fee paid that never was. `?status=created` still returns them, for
+    the case that needs it — money that did arrive outside the gateway."""
     query: dict = {"is_archived": False}
     if status:
         query["status"] = status.value
+    else:
+        query["status"] = {"$ne": PaymentStatus.created.value}
     if student_id:
         query["student_id"] = student_id
     total = await Payment.find(query).count()

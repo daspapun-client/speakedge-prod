@@ -163,27 +163,48 @@ async def send_attendance_reminders() -> None:
 
 
 async def credit_completed_batches() -> None:
-    """Once each class date has passed, credit teacher_cost_paise per class.
-    Deduped via Batch.cost_credited_dates."""
-    today = datetime.now(IST).strftime("%Y-%m-%d")
+    """Credit teacher_cost_paise for each class the teacher actually took: one
+    whose attendance was submitted as held and approved by admin. A class date
+    merely passing credits nothing — an assigned batch with no attendance is
+    not a class conducted. Backstop for an approval that carried no amount;
+    deduped via the attendance's own Remuneration and Batch.cost_credited_dates."""
     batches = await Batch.find(
         Batch.is_archived == False,  # noqa: E712
         Batch.teacher_cost_paise > 0,
     ).to_list()
-    for b in batches:
-        if not b.teacher_id:
-            continue
-        dates = b.class_dates or ([b.date] if b.date else [])
+    bmap = {str(b.id): b for b in batches if b.teacher_id}
+    if not bmap:
+        return
+    held = [
+        a for a in await Attendance.find(
+            {"batch_id": {"$in": list(bmap)}, "status": "approved", "is_archived": False}
+        ).to_list()
+        if a.class_held
+    ]
+    paid_for = {
+        r.attendance_id
+        for r in await Remuneration.find(
+            {"attendance_id": {"$in": [str(a.id) for a in held]}}).to_list()
+    }
+    by_batch: dict[str, list[Attendance]] = {}
+    for a in held:
+        by_batch.setdefault(a.batch_id, []).append(a)
+    for bid, atts in by_batch.items():
+        b = bmap[bid]
         credited = set(b.cost_credited_dates or [])
+        # Only the batch's own scheduled dates, as before — attendance on any
+        # other date is paid by admin at approval, never automatically.
+        scheduled = set(b.class_dates or ([b.date] if b.date else []))
         new_dates: list[str] = []
-        for d in dates:
-            if d >= today or d in credited:
+        for a in atts:
+            if a.date not in scheduled or a.date in credited or str(a.id) in paid_for:
                 continue
             await Remuneration(
-                teacher_id=b.teacher_id, period=d, amount=b.teacher_cost_paise,
+                teacher_id=a.teacher_id or b.teacher_id, period=a.date,
+                attendance_id=str(a.id), amount=b.teacher_cost_paise,
             ).insert()
-            credited.add(d)
-            new_dates.append(d)
+            credited.add(a.date)
+            new_dates.append(a.date)
         if new_dates:
             b.cost_credited_dates = sorted(credited)
             await b.save()

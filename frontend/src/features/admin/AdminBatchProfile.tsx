@@ -4,7 +4,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Star, UserMinus, UserPlus, Video } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { batchTimeLabel } from '@/features/batch/shared';
-import { findAdminListBatchByPrimaryId, findParentBatchForChild, isParentBatch, type AdminListBatch } from './batchSchedulePanel';
+import { FeeDueBadge, confirmApproveJoin, findAdminListBatchByPrimaryId, findParentBatchForChild, isParentBatch, type AdminListBatch, type FeeDue } from './batchSchedulePanel';
 import {
   AdminStudentLink,
   Column,
@@ -30,6 +30,8 @@ interface NamedStudent {
   age?: number | null;
   gender?: string | null;
   photo_url?: string | null;
+  /** Pending join requests only: the student's next unpaid monthly fee. */
+  fee_due?: FeeDue | null;
 }
 
 interface Batch {
@@ -801,11 +803,15 @@ export function AdminBatchProfile() {
           <div className="space-y-2">
             {data.pending.map((p) => (
               <div key={p.student_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-100 bg-amber-50/40 px-3 py-2">
-                <AdminStudentLink studentId={p.student_id} name={p.name} photoUrl={p.photo_url} gender={p.gender} />
+                <span className="flex flex-wrap items-center gap-2">
+                  <AdminStudentLink studentId={p.student_id} name={p.name} photoUrl={p.photo_url} gender={p.gender} />
+                  <FeeDueBadge fee={p.fee_due} />
+                </span>
                 <span className="flex flex-wrap items-center gap-2">
                   <Link to={`/admin/students/${p.student_id}`} className="text-xs text-brand hover:underline">View student</Link>
                   <button type="button" className="btn-ghost py-1 text-xs text-green-600" disabled={rosterAct.isPending}
-                    onClick={() => runRoster(() => unwrap(api.post(`/teacher/batches/${batchId}/approve-join`, { student_id: p.student_id })))}>
+                    onClick={() => confirmApproveJoin(p.name, p.fee_due)
+                      && runRoster(() => unwrap(api.post(`/teacher/batches/${batchId}/approve-join`, { student_id: p.student_id })))}>
                     Approve
                   </button>
                   <button type="button" className="btn-ghost py-1 text-xs text-red-600" disabled={rosterAct.isPending}

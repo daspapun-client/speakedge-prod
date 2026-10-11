@@ -800,7 +800,7 @@ class Batch(AuditedDocument):
     pending_ids: list[str] = Field(default_factory=list)      # students awaiting join approval
     reminded_on: Optional[str] = None  # IST date "YYYY-MM-DD" a class reminder was last sent (dedup)
     attendance_reminded_on: Optional[str] = None  # IST date attendance follow-up was sent (dedup)
-    teacher_cost_paise: int = 0  # per class; credited once each class date has passed
+    teacher_cost_paise: int = 0  # per class; credited once that class's attendance is approved as held
     cost_credited_dates: list[str] = Field(default_factory=list)  # class dates already turned into Remuneration
     # Attendance-confirmation workflow: class dates whose 24h-ahead confirmation
     # request has already been sent (dedup guard — a date fires exactly once).

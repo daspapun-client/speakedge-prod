@@ -55,6 +55,8 @@ interface BrowseBatches {
   /** False when the plan grants no teacher-led class at all (Tribe, Basic). */
   included: boolean;
   can_join: boolean;
+  /** An overdue monthly fee — joining a class is refused until it is paid. */
+  fee_due?: { due_date: string; amount: number } | null;
   /** Consecutive weekly classes one request (and one monthly fee) covers. */
   sessions_per_cycle?: number;
 }
@@ -722,8 +724,18 @@ export function BatchesPage() {
   // Basic) — the batches stay listed, but joining asks for an upgrade instead
   // of filing a request the admin would only have to decline.
   const included = data?.included ?? true;
-  const atCap = !included || (limit > 0 && used >= limit);
-  const capNote = included ? (
+  const planCap = !included || (limit > 0 && used >= limit);
+  // An overdue monthly fee closes every join action the same way the plan cap
+  // does; the plan meter below keeps reading the plan alone (`planCap`).
+  const feeDue = data?.fee_due ?? null;
+  const atCap = planCap || !!feeDue;
+  const capNote = feeDue ? (
+    <>
+      Your monthly fee of ₹{(feeDue.amount / 100).toLocaleString('en-IN')} was due on{' '}
+      {new Date(feeDue.due_date).toLocaleDateString()} —{' '}
+      <Link to="/dashboard/payments" className="font-semibold text-brand underline">pay it to join a class</Link>
+    </>
+  ) : included ? (
     'Plan limit reached — leave a batch to join another'
   ) : (
     <>
@@ -903,7 +915,7 @@ export function BatchesPage() {
               <Link to="/plans" className="font-semibold text-brand">Upgrade</Link>
             </div>
             <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-200">
-              <div className={`h-full rounded-full ${atCap ? 'bg-amber-400' : 'bg-brand'}`} style={{ width: `${pct}%` }} />
+              <div className={`h-full rounded-full ${planCap ? 'bg-amber-400' : 'bg-brand'}`} style={{ width: `${pct}%` }} />
             </div>
           </div>
         )}
@@ -1128,6 +1140,8 @@ export function BatchesPage() {
                   ? 'You are already enrolled in this batch.'
                   : inviteBatch.status === 'pending'
                     ? 'Your join request is awaiting admin approval.'
+                    : feeDue
+                      ? 'Your monthly fee is overdue — pay it to join this batch.'
                     : !included
                       ? 'Teacher-led classes are not included in your plan — upgrade to join this batch.'
                       : atCap
@@ -1271,7 +1285,7 @@ export function BatchesPage() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={atCap ? 'Plan limit reached' : `${used} of ${limit} used`} />
+              <StatusBadge status={planCap ? 'Plan limit reached' : `${used} of ${limit} used`} />
               <Link to="/plans" className="btn-gold inline-flex items-center gap-1.5 text-sm">
                 <Sparkles size={14} /> Upgrade plan <ArrowRight size={14} />
               </Link>
@@ -1280,13 +1294,13 @@ export function BatchesPage() {
           <div className="mt-4">
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-500">{used} of {limit} used</span>
-              <span className={atCap ? 'font-medium text-amber-600' : 'text-slate-400'}>
-                {atCap ? 'Leave a batch to join another' : `${limit - used} slot${limit - used === 1 ? '' : 's'} available`}
+              <span className={planCap ? 'font-medium text-amber-600' : 'text-slate-400'}>
+                {planCap ? 'Leave a batch to join another' : `${limit - used} slot${limit - used === 1 ? '' : 's'} available`}
               </span>
             </div>
             <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
               <div
-                className={`h-full rounded-full transition-all duration-500 ${atCap ? 'bg-amber-400' : 'bg-brand'}`}
+                className={`h-full rounded-full transition-all duration-500 ${planCap ? 'bg-amber-400' : 'bg-brand'}`}
                 style={{ width: `${pct}%` }}
               />
             </div>

@@ -37,6 +37,7 @@ from app.db.models import (
 )
 from app.modules.auth.service import create_user
 from app.modules.notification import service as notif
+from app.modules.payments import monthly
 from app.shared import file_service
 from app.shared.audit import log_activity
 from app.shared.teacher_reviews import ensure_review_requests
@@ -391,7 +392,7 @@ async def admin_teacher_profile(teacher_id: str, admin: CurrentUser = Depends(re
             "remuneration_paise": r.amount if r else 0,
             "remuneration_status": r.status if r else None,
         })
-    classes_conducted = sum(1 for a in attendance if a.status == "approved")
+    classes_conducted = sum(1 for a in attendance if a.status == "approved" and a.class_held)
     classes_pending = sum(1 for a in attendance if a.status == "pending")
 
     rem_items = await Remuneration.find(Remuneration.teacher_id == tid).sort(
@@ -575,7 +576,7 @@ async def dashboard(user: CurrentUser = Depends(require_teacher)):
         student_ids.update(b.student_ids)
         pending_join += len(b.pending_ids)
 
-    approved_att = [a for a in all_att if a.status == "approved"]
+    approved_att = [a for a in all_att if a.status == "approved" and a.class_held]
     present_total = sum(len(a.present_ids) for a in approved_att)
     absent_total = sum(len(a.absent_ids) for a in approved_att)
     marked = present_total + absent_total
@@ -643,7 +644,7 @@ class BatchBody(BaseModel):
     slot_end: str | None = None    # "HH:MM"
     schedule: str | None = None
     meeting_url: str | None = None
-    teacher_cost_paise: int = 0  # per class, auto-credited once each date passes
+    teacher_cost_paise: int = 0  # per class, credited once its attendance is approved as held
     student_ids: list[str] = []
 
 
@@ -1022,6 +1023,11 @@ async def request_join(batch_id: str, user: CurrentUser = Depends(require_unlock
             f"Your plan allows joining up to {limit} batch(es). "
             "Leave a batch before joining another."
         )
+    # An overdue monthly fee stops a new class before the request is filed, so
+    # admin is never asked to approve a student who still owes for the last one.
+    fee = await monthly.class_block(user.subject)
+    if fee:
+        raise ForbiddenError(monthly.due_message(fee))
 
     # One request covers the whole cycle. A course repeats weekly, so asking
     # again every week is exactly what the spec rules out: the request is filed
@@ -1194,13 +1200,18 @@ async def browse_batches(user: CurrentUser = Depends(require_unlocked_teacher_st
             "attendance_submitted_dates": sorted(set(att_dates.get(str(b.id), []))),
         })
     used, limit, has_membership = await _batch_allowance(user.subject)
+    fee = await monthly.class_block(user.subject)
     return ok({"batches": rows, "batches_used": used, "batch_limit": limit,
+               # The overdue monthly fee that request-join would refuse on, so
+               # the card says "pay to join" instead of failing the request.
+               "fee_due": fee,
                # One request buys this many consecutive weekly classes — the
                # same cycle a monthly fee covers (app/shared/batch_enrolment.py).
                "sessions_per_cycle": enrol.SESSIONS_PER_CYCLE,
                # Drives the "Upgrade to join" state on the cards instead of a
                # failed join attempt (mirrors GET /community/class-access).
-               "included": limit > 0, "can_join": has_membership and used < limit})
+               "included": limit > 0,
+               "can_join": has_membership and used < limit and not fee})
 
 
 @router.get("/batches/{batch_id}/detail")
@@ -1504,6 +1515,21 @@ async def batch_chat_ws(ws: WebSocket, batch_id: str, token: str = Query(...)):
         await hub.broadcast_presence(room)
 
 
+async def _with_fee_due(rows: list[dict], seen: dict[str, dict | None] | None = None) -> list[dict]:
+    """Hang each student's next unpaid monthly fee (`fee_due`, or None) off a
+    join-request row — admin decides the request, so admin has to see whether
+    the student owes and since when. Admin views only: a teacher sees the queue
+    but not a student's payment standing. `seen` spares a repeat lookup for a
+    student pending on several sittings of one course."""
+    seen = {} if seen is None else seen
+    for row in rows:
+        sid = row["student_id"]
+        if sid not in seen:
+            seen[sid] = await monthly.next_due(sid)
+        row["fee_due"] = seen[sid]
+    return rows
+
+
 async def _resolve_names(student_ids: list[str]) -> list[dict]:
     if not student_ids:
         return []
@@ -1611,8 +1637,10 @@ async def review_attendance(attendance_id: str, body: AttendanceReview,
 
     teacher = await Teacher.get(att.teacher_id) if att.teacher_id else None
 
-    # Remuneration for that class appears in the Teacher Dashboard.
-    if body.remuneration_paise > 0 and att.teacher_id:
+    # Remuneration for that class appears in the Teacher Dashboard — only for a
+    # class that was actually held, and only once per class.
+    if (body.remuneration_paise > 0 and att.teacher_id and att.class_held
+            and not await Remuneration.find_one(Remuneration.attendance_id == attendance_id)):
         await Remuneration(
             teacher_id=att.teacher_id, period=att.date,
             attendance_id=attendance_id, amount=body.remuneration_paise,
@@ -1645,6 +1673,8 @@ async def credit_remuneration(attendance_id: str, body: CreditRemuneration,
         raise NotFoundError("Attendance not found")
     if att.status != "approved":
         raise ConflictError("Attendance must be approved before crediting pay")
+    if not att.class_held:
+        raise ConflictError("This class was reported as not held — there is nothing to pay")
     if body.amount_paise <= 0:
         raise ValidationAppError("amount_paise must be positive")
     existing = await Remuneration.find_one(Remuneration.attendance_id == attendance_id)
@@ -1813,13 +1843,14 @@ async def admin_list_batches(admin: CurrentUser = Depends(require_admin),
                 reviews_by_batch.setdefault(r.batch_id, []).append(r)
 
     per_child: list[tuple[Batch, dict]] = []
+    fees: dict[str, dict | None] = {}
     for b in batches:
         data = b.model_dump(mode="json")
         teacher = _teacher_lookup(tmap, b.teacher_id)
         data["teacher_name"] = teacher.name if teacher else None
         data["teacher_photo_url"] = teacher.photo_url if teacher else None
         data["members"] = await _resolve_names(b.student_ids)
-        data["pending"] = await _resolve_names(b.pending_ids)
+        data["pending"] = await _with_fee_due(await _resolve_names(b.pending_ids), fees)
         data["meeting_active"] = _meeting_active(b)
         data["attendance_submitted_dates"] = sorted(set(att_dates.get(str(b.id), [])))
         revs = reviews_by_batch.get(str(b.id), [])
@@ -1877,7 +1908,7 @@ async def admin_batch_profile(batch_id: str, admin: CurrentUser = Depends(requir
         }
 
     members = [_student_row(sid) for sid in b.student_ids]
-    pending = [_student_row(sid) for sid in b.pending_ids]
+    pending = await _with_fee_due([_student_row(sid) for sid in b.pending_ids])
 
     attendance = await Attendance.find(
         Attendance.batch_id == batch_id, Attendance.is_archived == False  # noqa: E712
