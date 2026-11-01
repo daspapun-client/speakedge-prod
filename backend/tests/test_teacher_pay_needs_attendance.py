@@ -8,8 +8,11 @@ pay under Admin -> Teacher Payouts.
 from datetime import datetime, timedelta
 
 import pytest
+from beanie import PydanticObjectId
 
-from app.db.models import Attendance, Batch, Remuneration, Teacher
+from app.core.security import Role, hash_password
+from app.db import fix_phantom_remuneration as cleanup
+from app.db.models import Attendance, Batch, Remuneration, Teacher, User
 from app.shared import batch_enrolment as enrol
 from app.shared.scheduler import credit_completed_batches
 from tests.test_weekly_batch_enrolment import _admin_headers
@@ -104,3 +107,86 @@ async def test_a_class_reported_as_not_held_cannot_be_paid(client):
     r = await client.post(f"/api/v1/teacher/attendance/{att.id}/credit-remuneration",
                           headers=admin, json={"amount_paise": COST})
     assert r.status_code == 409
+
+
+async def _run_cleanup(monkeypatch, dry: bool = False) -> None:
+    async def _noop() -> None:
+        return None
+    monkeypatch.setattr(cleanup, "init_db", _noop)
+    monkeypatch.setattr(cleanup, "close_db", _noop)
+    await cleanup.fix(dry=dry)
+
+
+async def test_cleanup_removes_only_pay_with_no_class_behind_it(client, monkeypatch):
+    batch, date = await _past_batch()
+    taken = (datetime.now(enrol.IST).date() - timedelta(days=4)).isoformat()
+    settled = (datetime.now(enrol.IST).date() - timedelta(days=5)).isoformat()
+    batch.class_dates = [settled, taken, date]
+    batch.cost_credited_dates = [settled, taken, date]
+    await batch.save()
+    att = await _attendance(batch, taken, present_ids=["S1"], status="approved", approved=True)
+    tid = batch.teacher_id
+    phantom = await Remuneration(teacher_id=tid, period=date, amount=COST).insert()
+    real = await Remuneration(teacher_id=tid, period=taken, amount=COST).insert()
+    paid = await Remuneration(teacher_id=tid, period=settled, amount=COST, status="paid").insert()
+    manual = await Remuneration(teacher_id=tid, period="2026-10", amount=COST).insert()
+
+    await _run_cleanup(monkeypatch, dry=True)
+    assert await Remuneration.count() == 4
+    assert (await Remuneration.get(real.id)).attendance_id is None
+
+    await _run_cleanup(monkeypatch)
+    assert await Remuneration.get(phantom.id) is None
+    assert (await Remuneration.get(real.id)).attendance_id == str(att.id)
+    assert (await Remuneration.get(paid.id)).status == "paid"
+    assert await Remuneration.get(manual.id) is not None
+    batch = await Batch.get(batch.id)
+    assert sorted(batch.cost_credited_dates) == sorted([settled, taken])
+
+    # The cleared date earns normally once the class really is taken...
+    await _attendance(batch, date, present_ids=["S1"], status="approved", approved=True)
+    # ...and attendance filed late for the already-paid date does not pay it twice.
+    await _attendance(batch, settled, present_ids=["S1"], status="approved", approved=True)
+    await credit_completed_batches()
+    assert await Remuneration.find(Remuneration.period == date).count() == 1
+    assert await Remuneration.find(Remuneration.period == settled).count() == 1
+
+
+async def test_both_screens_stay_at_zero_until_a_class_is_taken_and_approved(client):
+    """The reported scenario end to end: Teacher Earnings and Admin -> Teacher
+    Payouts read nothing for an assigned batch, and the amount only for a class
+    the teacher reported and admin approved."""
+    admin = await _admin_headers(client)
+    batch, date = await _past_batch()
+    await Teacher.find_one(Teacher.id == PydanticObjectId(batch.teacher_id)).update(
+        {"$set": {"username": "rahul"}})
+    await User(username="rahul", email="rahul@speakedge.in", full_name="Rahul Sen",
+               password_hash=hash_password("Teacher@12345"), role=Role.teacher,
+               student_id="rahul").insert()
+    r = await client.post("/api/v1/auth/login",
+                          json={"username": "rahul", "password": "Teacher@12345"})
+    assert r.status_code == 200, r.text
+    teacher = {"Authorization": f"Bearer {r.json()['data']['access_token']}"}
+
+    async def screens() -> tuple[int, int, int, int]:
+        d = (await client.get("/api/v1/teacher/dashboard", headers=teacher)).json()["data"]
+        mine = (await client.get("/api/v1/teacher/my-remuneration", headers=teacher)).json()["data"]
+        p = (await client.get("/api/v1/teacher/admin/monthly-payouts", headers=admin)).json()["data"]
+        return (d["earnings"]["pending_paise"], sum(x["amount"] for x in mine),
+                d["analytics"]["classes_approved"], p["totals"]["total_paise"])
+
+    await credit_completed_batches()
+    assert await screens() == (0, 0, 0, 0)
+
+    r = await client.post("/api/v1/teacher/attendance", headers=teacher,
+                          json={"batch_id": str(batch.id), "date": date, "present_ids": ["S1"]})
+    assert r.status_code == 200, r.text
+    await credit_completed_batches()
+    assert await screens() == (0, 0, 0, 0)  # submitted, not yet verified
+
+    att = await Attendance.find_one(Attendance.batch_id == str(batch.id))
+    r = await client.post(f"/api/v1/teacher/attendance/{att.id}/review", headers=admin,
+                          json={"action": "approve"})
+    assert r.status_code == 200, r.text
+    await credit_completed_batches()
+    assert await screens() == (COST, COST, 1, COST)

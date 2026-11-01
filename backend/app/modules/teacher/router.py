@@ -2247,7 +2247,7 @@ async def export_class_report(admin: CurrentUser = Depends(require_admin),
 # --------------------------------------------------------------------------
 # Month-wise teacher payouts — how much each teacher must be paid for the
 # classes taken in a month. Aggregates Remuneration (credited per class date,
-# either on attendance approval or by the scheduler for completed batches).
+# only behind an approved, held attendance: at approval or by the scheduler).
 # --------------------------------------------------------------------------
 async def _payout_month_data(month: str | None) -> dict:
     """Per-teacher payout summary + the underlying class rows for one month."""
@@ -2259,8 +2259,8 @@ async def _payout_month_data(month: str | None) -> dict:
     tmap = {str(t.id): t for t in await Teacher.find().to_list()}
     batches = await Batch.find(Batch.is_archived == False).to_list()  # noqa: E712
     btitles = {str(b.id): b.title for b in batches}
-    # Scheduler-credited entries carry no attendance_id — recover the batch from
-    # the teacher + class date instead.
+    # Rows credited before pay required attendance carry no attendance_id —
+    # recover the batch from the teacher + class date instead.
     by_date = {(b.teacher_id, d): b.title
                for b in batches for d in (b.class_dates or ([b.date] if b.date else []))}
     att_map = {

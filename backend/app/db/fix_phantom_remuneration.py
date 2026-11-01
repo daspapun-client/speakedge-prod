@@ -15,7 +15,8 @@ For each such row:
     ``paid``/``received`` is only reported — money has moved, so a person decides
 
 ``Batch.cost_credited_dates`` is then reset to the dates that really have an
-approved, held attendance, so a class is credited normally once it is taken.
+approved, held attendance (or a row already paid, which stays credited), so a
+class is credited normally once it is taken.
 
 Idempotent. Usage:
     python -m app.db.fix_phantom_remuneration --dry-run     # report only
@@ -49,6 +50,7 @@ async def fix(dry: bool) -> None:
 
     linked = deleted = settled = 0
     deleted_paise = settled_paise = 0
+    settled_dates: set[tuple[str | None, str]] = set()
     for r in sorted(orphans, key=lambda x: (x.teacher_id, x.period)):
         who = f"{tnames.get(r.teacher_id, r.teacher_id)} {r.period} {r.amount / 100:g} INR {r.status}"
         match = unpaid.get((r.teacher_id, r.period))
@@ -74,6 +76,7 @@ async def fix(dry: bool) -> None:
         else:
             settled += 1
             settled_paise += r.amount
+            settled_dates.add((r.teacher_id, r.period))
             print(f"{tag}  REVIEW  {who} (no class taken, but already {r.status} — left alone)")
 
     held_dates: dict[str, set[str]] = {}
@@ -81,7 +84,11 @@ async def fix(dry: bool) -> None:
         held_dates.setdefault(a.batch_id, set()).add(a.date)
     reset = 0
     for b in await Batch.find({"cost_credited_dates": {"$ne": []}}).to_list():
-        keep = sorted(set(b.cost_credited_dates) & held_dates.get(str(b.id), set()))
+        # A date whose row was already paid stays credited, or attendance filed
+        # for it later would pay the same class twice.
+        keep = sorted(d for d in b.cost_credited_dates
+                      if d in held_dates.get(str(b.id), set())
+                      or (b.teacher_id, d) in settled_dates)
         if keep != sorted(b.cost_credited_dates):
             reset += 1
             if not dry:
