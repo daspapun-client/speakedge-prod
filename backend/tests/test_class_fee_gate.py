@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.db.models import Batch, Payment, PaymentStatus, Subscription
+from app.db.models import Attendance, Batch, Payment, PaymentStatus, Subscription
 from app.modules.payments import monthly
 from tests.test_weekly_batch_enrolment import (
     STUDENT,
@@ -23,12 +23,16 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _backdate(client, *, days: int, class_started: bool) -> Subscription:
-    """Move the Gold membership's start `days` back, so a monthly fee is due."""
+    """Move the Gold membership's start `days` back. With `class_started` the
+    student also attended a class that first day, so month 1 is owed."""
     await client.get("/api/v1/payments/plans")  # seeds PlanConfig
     sub = await Subscription.find_one(Subscription.student_id == STUDENT)
     sub.started_at = datetime.now(timezone.utc) - timedelta(days=days)
     sub.billing_start_at = sub.started_at if class_started else None
     await sub.save()
+    if class_started:
+        await Attendance(batch_id="B0", date=f"{sub.started_at:%Y-%m-%d}", present_ids=[STUDENT],
+                         status="approved", approved=True).insert()
     return sub
 
 
@@ -70,8 +74,7 @@ async def test_a_fee_only_coming_up_does_not_block(client):
 
 
 async def test_a_member_who_never_had_a_class_can_request_their_first(client):
-    """No class start date and no seat ever held: the schedule is only the
-    subscription-start fallback, and the first fee is not owed before a class."""
+    """No class ever attended: nothing is owed, however long ago they joined."""
     student = await _student_headers(client)
     _, batch_ids = await _weekly_course()
     await _backdate(client, days=40, class_started=False)

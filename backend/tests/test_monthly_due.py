@@ -1,11 +1,11 @@
-"""Monthly fee due dates: the schedule derived from the subscription start day,
+"""Monthly fee due dates: owed only for months the student attended a class,
 and the /payments/monthly-due reminder that keeps firing until the fee is paid."""
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from app.db.models import Payment, PaymentStatus, PlanConfig, Subscription, User
+from app.db.models import Attendance, Notification, Payment, PaymentStatus, PlanConfig, Subscription, User
 from app.core.security import Role, hash_password
 from app.modules.payments import monthly
 
@@ -54,16 +54,58 @@ async def _subscribe(client, plan: str, started_at: datetime) -> Subscription:
     return sub
 
 
+async def attend(days_ago: int, student_id: str = STUDENT, **kw) -> Attendance:
+    """The student marked present in a held class, approved by admin."""
+    day = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    att = Attendance(batch_id="B1", teacher_id="T1", date=day, present_ids=[student_id],
+                     **({"status": "approved", "approved": True} | kw))
+    await att.insert()
+    return att
+
+
 async def test_tribe_has_no_monthly_fee(client):
     h = await _login(client)
     await _subscribe(client, "Tribe", datetime.now(timezone.utc) - timedelta(days=28))
+    await attend(27)
     assert (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"] is None
+
+
+async def test_a_member_who_attends_no_class_owes_nothing(client):
+    """Holding the membership is not enough: no class attended, no fee — and a
+    class reported but not approved, rejected, or not held does not count."""
+    h = await _login(client)
+    await _subscribe(client, "Silver", datetime.now(timezone.utc) - timedelta(days=100))
+    assert (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"] is None
+
+    await attend(60, status="pending", approved=False)
+    await attend(50, status="rejected", approved=False)
+    await attend(40, class_held=False)
+    await Attendance(batch_id="B1", date="2026-01-01", absent_ids=[STUDENT],
+                     status="approved", approved=True).insert()
+    assert (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"] is None
+
+
+async def test_only_months_with_attendance_are_owed():
+    """Attended in cycles 1 and 3, skipped cycle 2: months 1 and 3 are owed."""
+    started = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    sub = SimpleNamespace(started_at=started, expires_at=datetime(2026, 12, 31, tzinfo=timezone.utc),
+                          billing_start_at=None)
+    attended = [datetime(2026, 1, 15, tzinfo=timezone.utc), datetime(2026, 1, 22, tzinfo=timezone.utc),
+                datetime(2026, 3, 20, tzinfo=timezone.utc)]
+    # Counted from the first class attended (15 Jan), not the purchase (10 Jan).
+    assert [d.date().isoformat() for d in monthly.owed_due_dates(sub, attended)] == [
+        "2026-02-15", "2026-04-15",
+    ]
+    assert monthly.owed_due_dates(sub, []) == []
 
 
 async def test_reminder_activates_three_days_before_due(client):
     h = await _login(client)
-    # Started 1 month + 2 days ago -> the first fee falls due in ~2 days.
+    # Started 1 month - 2 days ago and attended since -> month 1 due in ~2 days.
     await _subscribe(client, "Silver", datetime.now(timezone.utc) - timedelta(days=28))
+    await (await Subscription.find_one(Subscription.student_id == STUDENT)).set(
+        {"billing_start_at": datetime.now(timezone.utc) - timedelta(days=28)})
+    await attend(20)
 
     due = (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"]
     assert due is not None
@@ -77,6 +119,7 @@ async def test_reminder_activates_three_days_before_due(client):
 async def test_due_is_outside_the_window_early_in_the_month(client):
     h = await _login(client)
     await _subscribe(client, "Silver", datetime.now(timezone.utc) - timedelta(days=5))
+    await attend(5)
 
     due = (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"]
     assert due["reminder_active"] is False, "should not nag ~25 days out"
@@ -85,6 +128,8 @@ async def test_due_is_outside_the_window_early_in_the_month(client):
 async def test_overdue_month_keeps_being_returned_then_clears_when_paid(client):
     h = await _login(client)
     await _subscribe(client, "Silver", datetime.now(timezone.utc) - timedelta(days=40))
+    await attend(40)  # month 1, now overdue
+    await attend(2)   # month 2, still running
 
     due = (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"]
     assert due["overdue"] is True and due["reminder_active"] is True
@@ -105,3 +150,32 @@ async def test_overdue_month_keeps_being_returned_then_clears_when_paid(client):
     nxt = (await client.get("/api/v1/payments/monthly-due", headers=h)).json()["data"]
     assert nxt["due_month"] != first_month
     assert nxt["reminder_active"] is False
+
+
+async def test_reminders_already_sent_for_unattended_months_are_withdrawn(client):
+    """What existing members see after the deploy: the reminder a non-attending
+    member got under the old rule leaves their bell; a real one stays."""
+    from app.shared.scheduler import retrofit_attendance_billing, send_monthly_payment_reminders
+
+    h = await _login(client)
+    sub = await _subscribe(client, "Silver", datetime.now(timezone.utc) - timedelta(days=40))
+    stale_month = monthly.month_key(monthly.due_dates(sub)[0])
+    sub.monthly_reminders_sent = [stale_month]
+    await sub.save()
+    await Notification(recipient=STUDENT, title="Monthly payment overdue",
+                       body="old reminder", kind="payment").insert()
+    await Notification(recipient=STUDENT, title="Welcome", body="hi").insert()
+
+    await retrofit_attendance_billing()
+    await retrofit_attendance_billing()
+    bell = (await client.get("/api/v1/notifications/my", headers=h)).json()["data"]
+    titles = [n["title"] for n in bell]
+    assert titles == ["Welcome"]
+    assert (await Subscription.get(sub.id)).monthly_reminders_sent == []
+
+    # A member who did attend keeps their reminder.
+    await attend(39)
+    await send_monthly_payment_reminders()
+    await retrofit_attendance_billing()
+    assert await Notification.find({"recipient": STUDENT, "is_archived": False,
+                                    "title": "Monthly payment overdue"}).count() == 1

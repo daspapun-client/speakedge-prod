@@ -274,7 +274,7 @@ async def send_subscription_expiry_reminders() -> None:
 async def send_monthly_payment_reminders() -> None:
     """Notify 3 days before each monthly fee falls due (and once it is overdue).
 
-    The due schedule is derived from the subscription start day — see
+    Only months the student attended a class in are owed — see
     payments/monthly.py. Deduped per due month via
     Subscription.monthly_reminders_sent so one notification is raised per month;
     the dashboard pop-up is what keeps nagging until the payment lands.
@@ -301,6 +301,56 @@ async def send_monthly_payment_reminders() -> None:
         sent += 1
     if sent:
         log.info("Sent %s monthly payment reminders", sent)
+
+
+MONTHLY_REMINDER_TITLES = ("Monthly payment due", "Monthly payment overdue")
+
+
+async def withdraw_unowed_monthly_reminders() -> int:
+    """Monthly fees are owed only for months the student attended a class
+    (payments/monthly.py), but reminders went out before that rule — to members
+    who never attended one. Forget the reminded months that are not owed, and
+    when none of a student's reminders was for an owed month, archive those
+    notifications too so the bell stops asking for money. Idempotent."""
+    withdrawn = 0
+    for sub in await Subscription.find({"is_active": True, "monthly_reminders_sent": {"$ne": []}}).to_list():
+        attended = await monthly.attended_dates(sub.student_id)
+        owed = {monthly.month_key(d) for d in monthly.owed_due_dates(sub, attended)}
+        keep = [m for m in sub.monthly_reminders_sent if m in owed]
+        if keep == sub.monthly_reminders_sent:
+            continue
+        if not keep:
+            for n in await Notification.find({
+                "recipient": sub.student_id, "title": {"$in": list(MONTHLY_REMINDER_TITLES)},
+                "is_archived": False,
+            }).to_list():
+                n.archive("system", "monthly fee not owed: no class attended that month")
+                await n.save()
+                withdrawn += 1
+        sub.monthly_reminders_sent = keep
+        await sub.save()
+    return withdrawn
+
+
+async def retrofit_attendance_billing() -> None:
+    """Bring data written before pay and fees followed attendance into line:
+    teacher pay with no class behind it, and monthly-fee reminders for months
+    the student never attended. Both passes are idempotent, so this runs on
+    every boot and a deploy corrects existing users with no manual step."""
+    from app.db.fix_phantom_remuneration import void_phantom_remuneration
+
+    try:
+        out = await void_phantom_remuneration()
+        if out["voided"] or out["linked"] or out["settled"]:
+            log.info("teacher pay retrofit: %s", out)
+    except Exception:  # pragma: no cover - a scheduler pass must never die
+        log.exception("teacher pay retrofit failed")
+    try:
+        withdrawn = await withdraw_unowed_monthly_reminders()
+        if withdrawn:
+            log.info("withdrew %s monthly-fee reminder(s) for months not attended", withdrawn)
+    except Exception:  # pragma: no cover
+        log.exception("monthly reminder retrofit failed")
 
 
 async def apply_plan_changes() -> None:
@@ -366,6 +416,10 @@ def start_scheduler() -> None:
                       id="plan_changes", replace_existing=True)
     scheduler.add_job(roll_weekly_slots, "interval", hours=6,
                       id="weekly_slot_roll", replace_existing=True)
+    # One pass on boot: existing data is corrected on deploy.
+    scheduler.add_job(retrofit_attendance_billing, "date",
+                      run_date=datetime.now(timezone.utc),
+                      id="attendance_billing_retrofit", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started")
 

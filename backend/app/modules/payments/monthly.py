@@ -19,6 +19,14 @@ The anchor is ``Subscription.billing_start_at`` — the class start date, set by
 an admin (auto-suggested from the first batch the student is enrolled in).
 Until it is set the schedule falls back to ``started_at``, so a subscription
 that predates this field keeps its old dates.
+
+**A fee is only owed for a month the student actually attended.** Holding a
+membership, or a seat on a batch, is not enough: month *n* covers the cycle
+that ends on its due date, and it is owed only when an approved, held
+``Attendance`` marks the student present inside that cycle (``owed_due_dates``).
+With no attendance at all nothing is due, and without an admin class start date
+the cycle counts from the first class attended. It is derived live, so existing
+members are re-read under this rule — no data to migrate.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -61,20 +69,57 @@ def billing_anchor(sub: Subscription) -> datetime:
     return _aware(getattr(sub, "billing_start_at", None) or sub.started_at)
 
 
-def due_dates(sub: Subscription) -> list[datetime]:
-    """Every monthly-fee due date for this subscription, oldest first.
+def _cycles(sub: Subscription, anchor: datetime) -> list[tuple[datetime, datetime]]:
+    """(cycle start, due date) for every monthly cycle, oldest first.
 
     A buyer who paid their first monthly fee together with the admission fee has
     month 1 settled already, so the schedule starts at month 2 for them."""
-    started, expires = billing_anchor(sub), _aware(sub.expires_at)
+    expires = _aware(sub.expires_at)
     first = 2 if getattr(sub, "first_month_included", False) else 1
-    out: list[datetime] = []
+    out: list[tuple[datetime, datetime]] = []
     for n in range(first, _MAX_DUES + 1):
-        due = _add_months(started, n)
+        due = _add_months(anchor, n)
         if due > expires:
             break
-        out.append(due)
+        out.append((_add_months(anchor, n - 1), due))
     return out
+
+
+def due_dates(sub: Subscription) -> list[datetime]:
+    """The monthly cycle's calendar — every due date, attended or not. What is
+    actually owed is ``owed_due_dates``; this is only the cycle boundaries."""
+    return [due for _, due in _cycles(sub, billing_anchor(sub))]
+
+
+def owed_due_dates(sub: Subscription, attended: list[datetime]) -> list[datetime]:
+    """The due dates the student owes: one per cycle in which they attended a
+    class. Counted from the admin's class start date, else from the first class
+    attended; no attendance means nothing is owed."""
+    if not attended:
+        return []
+    anchor = _aware(sub.billing_start_at) if getattr(sub, "billing_start_at", None) else attended[0]
+    # Attendance is a date, so cycles are too — a class on the start day counts.
+    anchor = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+    return [due for start, due in _cycles(sub, anchor)
+            if any(start <= a < due for a in attended)]
+
+
+async def attended_dates(student_id: str) -> list[datetime]:
+    """Dates the student was marked present in a teacher-led class that was
+    held and approved by admin, oldest first."""
+    from app.db.models import Attendance
+
+    rows = await Attendance.find(
+        {"present_ids": student_id, "status": "approved", "is_archived": False}).to_list()
+    out: set[datetime] = set()
+    for a in rows:
+        if not a.class_held:
+            continue
+        try:
+            out.add(datetime.strptime(a.date, "%Y-%m-%d").replace(tzinfo=timezone.utc))
+        except ValueError:
+            continue
+    return sorted(out)
 
 
 def month_key(dt: datetime) -> str:
@@ -127,7 +172,8 @@ async def next_due(student_id: str) -> dict | None:
     if not cfg or cfg.monthly_fee <= 0:
         return None
 
-    dues = due_dates(sub)
+    attended = await attended_dates(student_id)
+    dues = owed_due_dates(sub, attended)
     if not dues:
         return None
 
@@ -151,9 +197,10 @@ async def next_due(student_id: str) -> dict | None:
             "subscription_id": str(sub.id),
             "plan": sub.plan,
             "plan_label": cfg.label,
-            # What the schedule is counted from, and whether it is the real
-            # class start date or the fallback.
-            "billing_start_at": billing_anchor(sub).isoformat(),
+            # What the schedule is counted from, and whether it is the admin's
+            # class start date or the first class attended.
+            "billing_start_at": (_aware(sub.billing_start_at) if sub.billing_start_at
+                                 else attended[0]).isoformat(),
             "class_start_set": sub.billing_start_at is not None,
             "due_month": key,
             "due_date": due.isoformat(),
@@ -171,18 +218,10 @@ async def class_block(student_id: str) -> dict | None:
     class, or None when they may join.
 
     A fee is only *overdue* once its due date has passed — one that is merely
-    coming up does not block. And until admin has set the class start date the
-    schedule is counted from the subscription start, so a member who has never
-    held a seat in a class is not held to it: their first fee falls due a month
-    after their first class, not a month after they enrolled."""
-    from app.db.models import Batch
-
+    coming up does not block. A member who never attended a class owes nothing,
+    so their first request always goes through."""
     due = await next_due(student_id)
-    if not due or not due["overdue"]:
-        return None
-    if not due["class_start_set"] and not await Batch.find_one({"student_ids": student_id}):
-        return None
-    return due
+    return due if due and due["overdue"] else None
 
 
 def due_message(due: dict) -> str:

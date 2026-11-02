@@ -14,7 +14,7 @@ from app.core.security import Role, hash_password
 from app.db import fix_phantom_remuneration as cleanup
 from app.db.models import Attendance, Batch, Remuneration, Teacher, User
 from app.shared import batch_enrolment as enrol
-from app.shared.scheduler import credit_completed_batches
+from app.shared.scheduler import credit_completed_batches, retrofit_attendance_billing
 from tests.test_weekly_batch_enrolment import _admin_headers
 
 pytestmark = pytest.mark.asyncio
@@ -109,15 +109,7 @@ async def test_a_class_reported_as_not_held_cannot_be_paid(client):
     assert r.status_code == 409
 
 
-async def _run_cleanup(monkeypatch, dry: bool = False) -> None:
-    async def _noop() -> None:
-        return None
-    monkeypatch.setattr(cleanup, "init_db", _noop)
-    monkeypatch.setattr(cleanup, "close_db", _noop)
-    await cleanup.fix(dry=dry)
-
-
-async def test_cleanup_removes_only_pay_with_no_class_behind_it(client, monkeypatch):
+async def test_cleanup_withdraws_only_pay_with_no_class_behind_it(client):
     batch, date = await _past_batch()
     taken = (datetime.now(enrol.IST).date() - timedelta(days=4)).isoformat()
     settled = (datetime.now(enrol.IST).date() - timedelta(days=5)).isoformat()
@@ -131,12 +123,15 @@ async def test_cleanup_removes_only_pay_with_no_class_behind_it(client, monkeypa
     paid = await Remuneration(teacher_id=tid, period=settled, amount=COST, status="paid").insert()
     manual = await Remuneration(teacher_id=tid, period="2026-10", amount=COST).insert()
 
-    await _run_cleanup(monkeypatch, dry=True)
-    assert await Remuneration.count() == 4
+    await cleanup.void_phantom_remuneration(dry=True)
+    assert await Remuneration.find(Remuneration.is_archived == False).count() == 4  # noqa: E712
     assert (await Remuneration.get(real.id)).attendance_id is None
 
-    await _run_cleanup(monkeypatch)
-    assert await Remuneration.get(phantom.id) is None
+    # What the scheduler runs on boot — twice, as every restart does.
+    await retrofit_attendance_billing()
+    await retrofit_attendance_billing()
+    voided = await Remuneration.get(phantom.id)
+    assert voided.is_archived and voided.delete_reason == cleanup.REASON
     assert (await Remuneration.get(real.id)).attendance_id == str(att.id)
     assert (await Remuneration.get(paid.id)).status == "paid"
     assert await Remuneration.get(manual.id) is not None
@@ -148,8 +143,9 @@ async def test_cleanup_removes_only_pay_with_no_class_behind_it(client, monkeypa
     # ...and attendance filed late for the already-paid date does not pay it twice.
     await _attendance(batch, settled, present_ids=["S1"], status="approved", approved=True)
     await credit_completed_batches()
-    assert await Remuneration.find(Remuneration.period == date).count() == 1
-    assert await Remuneration.find(Remuneration.period == settled).count() == 1
+    live = Remuneration.is_archived == False  # noqa: E712
+    assert await Remuneration.find(Remuneration.period == date, live).count() == 1
+    assert await Remuneration.find(Remuneration.period == settled, live).count() == 1
 
 
 async def test_both_screens_stay_at_zero_until_a_class_is_taken_and_approved(client):

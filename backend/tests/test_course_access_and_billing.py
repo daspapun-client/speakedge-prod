@@ -15,6 +15,7 @@ from PIL import Image
 from app.core.security import Role, hash_password
 from app.db.models import (
     ActivationCode,
+    Attendance,
     Batch,
     PlanConfig,
     Student,
@@ -287,16 +288,22 @@ async def test_admin_sets_class_start_date_and_it_moves_the_schedule(client):
     # Earliest scheduled class, not the first one listed.
     assert r.json()["data"]["suggested_class_start_date"].startswith("2026-09-16")
     assert r.json()["data"]["class_start_date"] is None
+    # Enrolled but never attended: nothing is billed.
+    assert r.json()["data"]["effective_anchor"] is None
+    assert r.json()["data"]["due_dates"] == []
 
+    await Attendance(batch_id="B1", date="2026-09-23", present_ids=[code],
+                     status="approved", approved=True).insert()
     r = await client.post(f"/api/v1/payments/admin/class-start/{code}", headers=headers,
                           json={"class_start_date": "2026-09-16"})
     assert r.status_code == 200, r.text
-    assert r.json()["data"]["due_dates"][0].startswith("2026-10-16")
+    # Month 1 only: the one month with a class attended.
+    assert [d[:10] for d in r.json()["data"]["due_dates"]] == ["2026-10-16"]
 
     sub = await Subscription.find_one(Subscription.student_id == code)
     assert sub.billing_start_at is not None
 
-    # Clearing it falls back to the subscription start date.
+    # Clearing it counts from the first class attended.
     r = await client.post(f"/api/v1/payments/admin/class-start/{code}", headers=headers,
                           json={"class_start_date": None})
     assert r.status_code == 200

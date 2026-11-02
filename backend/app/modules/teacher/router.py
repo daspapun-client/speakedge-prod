@@ -395,8 +395,9 @@ async def admin_teacher_profile(teacher_id: str, admin: CurrentUser = Depends(re
     classes_conducted = sum(1 for a in attendance if a.status == "approved" and a.class_held)
     classes_pending = sum(1 for a in attendance if a.status == "pending")
 
-    rem_items = await Remuneration.find(Remuneration.teacher_id == tid).sort(
-        -Remuneration.created_at).to_list()
+    rem_items = await Remuneration.find(
+        Remuneration.teacher_id == tid, Remuneration.is_archived == False,  # noqa: E712
+    ).sort(-Remuneration.created_at).to_list()
     payments = [{
         "id": str(r.id), "period": r.period, "amount": r.amount,
         "status": r.status, "created_at": r.created_at.isoformat(),
@@ -559,7 +560,8 @@ async def dashboard(user: CurrentUser = Depends(require_teacher)):
     received_amount = 0
     month_keys = _last_n_month_keys(6)
     earnings_by_month = {k: 0 for k in month_keys}
-    for r in await Remuneration.find(Remuneration.teacher_id == tid).to_list():
+    for r in await Remuneration.find(Remuneration.teacher_id == tid,
+                                     Remuneration.is_archived == False).to_list():  # noqa: E712
         if r.status == "pending":
             pending_amount += r.amount
         if r.status == "received":
@@ -1696,9 +1698,9 @@ async def credit_remuneration(attendance_id: str, body: CreditRemuneration,
 @router.get("/my-remuneration")
 async def my_remuneration(user: CurrentUser = Depends(require_teacher)):
     t = await _own_teacher(user)
-    items = await Remuneration.find(Remuneration.teacher_id == str(t.id)).sort(
-        -Remuneration.created_at
-    ).to_list()
+    items = await Remuneration.find(
+        Remuneration.teacher_id == str(t.id), Remuneration.is_archived == False,  # noqa: E712
+    ).sort(-Remuneration.created_at).to_list()
     return ok([r.model_dump(mode="json") for r in items])
 
 

@@ -170,7 +170,7 @@ async def action_inbox(admin: CurrentUser = Depends(require_admin)):
         TeamJoinRequest.find({**not_archived, "status": "pending"})
         .sort(-TeamJoinRequest.created_at).limit(_INBOX_POOL).to_list(),
         Attendance.find({"status": "pending"}).sort(-Attendance.created_at).limit(_INBOX_POOL).to_list(),
-        Remuneration.find({"status": "pending"}).sort(-Remuneration.created_at).limit(_INBOX_POOL).to_list(),
+        Remuneration.find({**not_archived, "status": "pending"}).sort(-Remuneration.created_at).limit(_INBOX_POOL).to_list(),
         BookOrder.find({**not_archived, "status": OrderStatus.activation_pending.value})
         .sort(-BookOrder.created_at).limit(_INBOX_POOL).to_list(),
         Lead.find({**not_archived, "status": "new"}).sort(-Lead.created_at).limit(_INBOX_POOL).to_list(),

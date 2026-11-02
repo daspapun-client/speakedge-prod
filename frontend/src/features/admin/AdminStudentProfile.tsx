@@ -221,7 +221,8 @@ function ConsentPill({ label, ok }: { label: string; ok?: boolean }) {
 interface ClassStart {
   class_start_date: string | null;
   suggested_class_start_date: string | null;
-  effective_anchor: string;
+  effective_anchor: string | null;
+  classes_attended: number;
   started_at: string;
   due_dates: string[];
 }
@@ -354,9 +355,9 @@ function CourseAndAccessSection({ student, onChanged }: { student: StudentDetail
             Monthly fee — class start date
           </h3>
           <p className="mt-1 text-sm text-slate-500">
-            The monthly fee is counted from the student&apos;s first teacher-led scheduled class. The
-            first month falls due one calendar month after this date. Leave it empty to fall back to
-            the subscription start date.
+            The monthly fee is charged only for months the student attends: a month is owed when an
+            approved class attendance marks them present in it. The first month falls due one
+            calendar month after this date. Leave it empty to count from the first class attended.
           </p>
           {!billing ? (
             <p className="mt-3 text-sm text-slate-500">No active subscription — nothing to bill yet.</p>
@@ -391,8 +392,15 @@ function CourseAndAccessSection({ student, onChanged }: { student: StudentDetail
                 </button>
               </div>
               <p className="mt-3 text-sm text-slate-500">
-                Counting from <span className="font-semibold">{fmtDate(billing.effective_anchor)}</span>
-                {billing.class_start_date ? ' (class start date)' : ' (subscription start — no class date set)'}.
+                {billing.effective_anchor ? (
+                  <>
+                    Counting from <span className="font-semibold">{fmtDate(billing.effective_anchor)}</span>
+                    {billing.class_start_date ? ' (class start date)' : ' (first class attended)'} ·{' '}
+                    {billing.classes_attended} class{billing.classes_attended === 1 ? '' : 'es'} attended.
+                  </>
+                ) : (
+                  <>No class attended yet — no monthly fee is due.</>
+                )}
                 {billing.due_dates.length > 0 && (
                   <> Next due dates: {billing.due_dates.slice(0, 3).map((d) => fmtDate(d)).join(', ')}
                     {billing.due_dates.length > 3 ? '…' : ''}</>

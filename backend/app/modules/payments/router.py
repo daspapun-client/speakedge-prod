@@ -393,8 +393,8 @@ async def create_monthly_order(user: CurrentUser = Depends(require_student)):
 
 
 class ClassStartBody(BaseModel):
-    # "YYYY-MM-DD". Null clears it and falls the schedule back to the
-    # subscription start date.
+    # "YYYY-MM-DD". Null clears it and the schedule counts from the first
+    # class attended.
     class_start_date: str | None = None
 
 
@@ -409,6 +409,8 @@ async def get_class_start(student_id: str, _admin: CurrentUser = Depends(require
     if not sub:
         raise NotFoundError("No active subscription for this student")
     suggested = await monthly.suggest_class_start(student_id)
+    attended = await monthly.attended_dates(student_id)
+    anchor = sub.billing_start_at or (attended[0] if attended else None)
     return ok({
         "student_id": student_id,
         "subscription_id": str(sub.id),
@@ -417,8 +419,10 @@ async def get_class_start(student_id: str, _admin: CurrentUser = Depends(require
         "expires_at": sub.expires_at.isoformat(),
         "class_start_date": sub.billing_start_at.isoformat() if sub.billing_start_at else None,
         "suggested_class_start_date": suggested.isoformat() if suggested else None,
-        "effective_anchor": monthly.billing_anchor(sub).isoformat(),
-        "due_dates": [d.isoformat() for d in monthly.due_dates(sub)],
+        # None until the student attends a class — nothing is billed before that.
+        "effective_anchor": monthly.as_utc(anchor).isoformat() if anchor else None,
+        "classes_attended": len(attended),
+        "due_dates": [d.isoformat() for d in monthly.owed_due_dates(sub, attended)],
     })
 
 
@@ -447,12 +451,13 @@ async def set_class_start(student_id: str, body: ClassStartBody,
     await log_activity(admin.subject, "payment.class_start", role=admin.role.value,
                        target_type="student", target_id=student_id,
                        meta={"class_start_date": body.class_start_date})
+    attended = await monthly.attended_dates(student_id)
     return ok(
         {"class_start_date": sub.billing_start_at.isoformat() if sub.billing_start_at else None,
-         "due_dates": [d.isoformat() for d in monthly.due_dates(sub)]},
-        "Class start date saved — monthly fees are counted from this date"
+         "due_dates": [d.isoformat() for d in monthly.owed_due_dates(sub, attended)]},
+        "Class start date saved — monthly fees are counted from this date, for months attended"
         if sub.billing_start_at else
-        "Class start date cleared — monthly fees fall back to the subscription start date",
+        "Class start date cleared — monthly fees count from the first class attended",
     )
 
 

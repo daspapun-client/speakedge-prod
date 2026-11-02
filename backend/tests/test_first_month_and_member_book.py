@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.security import Role, hash_password
 from app.db.models import (
     ActivationCode,
+    Attendance,
     BookOrder,
     BookProduct,
     CodeStatus,
@@ -242,18 +243,25 @@ async def test_prepaid_first_month_is_not_billed_again(client):
     cfg = await _silver(client)
     student = await _student_headers(client)
 
-    # A subscription that started 28 days ago: month 1 would be due in ~2 days.
-    started = datetime.now(timezone.utc) - timedelta(days=28)
+    # Started 40 days ago with a class attended in each month so far.
+    started = datetime.now(timezone.utc) - timedelta(days=40)
     await Subscription(
-        student_id=STUDENT, plan="Silver", started_at=started,
+        student_id=STUDENT, plan="Silver", started_at=started, billing_start_at=started,
         expires_at=started + timedelta(days=365), is_active=True,
         first_month_included=True,
     ).insert()
+    for days_ago in (40, 5):
+        day = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+        await Attendance(batch_id="B1", date=day, present_ids=[STUDENT],
+                         status="approved", approved=True).insert()
 
     due = (await client.get("/api/v1/payments/monthly-due", headers=student)).json()["data"]
-    # Month 1 is paid, and month 2 is still ~32 days out, so nothing is owed yet.
+    # Month 1 (overdue by now) was paid at checkout, so the fee owed is month 2,
+    # still ~20 days out.
     assert due is not None
     assert due["amount"] == cfg.monthly_fee
+    assert due["due_month"] == monthly.month_key(monthly.due_dates(
+        await Subscription.find_one(Subscription.student_id == STUDENT))[0])
     assert due["days_until"] > monthly.REMINDER_DAYS
     assert due["reminder_active"] is False
 
